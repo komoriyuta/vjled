@@ -1,0 +1,148 @@
+import type { Renderer } from "../types";
+
+const VERT = `
+attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+`;
+
+const SHADERTOY_PREAMBLE = `
+precision highp float;
+uniform float iTime;
+uniform vec2  iResolution;
+uniform vec4  iMouse;
+uniform int   iFrame;
+`;
+
+const SHADERTOY_POSTAMBLE = `
+void main() {
+    vec4 _fragColor;
+    mainImage(_fragColor, gl_FragCoord.xy);
+    gl_FragColor = _fragColor;
+}
+`;
+
+function buildFragmentSource(userCode: string): string {
+  const trimmed = userCode.trim();
+  if (trimmed.includes("void main(")) {
+    return SHADERTOY_PREAMBLE + "\n" + trimmed;
+  }
+  if (trimmed.includes("mainImage")) {
+    return SHADERTOY_PREAMBLE + "\n" + trimmed + "\n" + SHADERTOY_POSTAMBLE;
+  }
+  return SHADERTOY_PREAMBLE + "\n" + trimmed + "\n" + SHADERTOY_POSTAMBLE;
+}
+
+export class GLSLRenderer implements Renderer {
+  private gl: WebGLRenderingContext | null = null;
+  private canvas: HTMLCanvasElement | null = null;
+  private program: WebGLProgram | null = null;
+  private uLocs: Record<string, WebGLUniformLocation | null> = {};
+  private frame = 0;
+  private code = "";
+
+  init(canvas: HTMLCanvasElement): void {
+    this.canvas = canvas;
+    this.gl = canvas.getContext("webgl", {
+      alpha: true,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: true,
+      antialias: false,
+    });
+    if (!this.gl) return;
+    this.setupQuad();
+  }
+
+  setCode(code: string): void {
+    this.code = code;
+    this.frame = 0;
+    this.rebuildProgram();
+  }
+
+  private rebuildProgram(): void {
+    const gl = this.gl;
+    if (!gl) return;
+
+    if (this.program) {
+      gl.deleteProgram(this.program);
+      this.program = null;
+    }
+
+    const source = buildFragmentSource(this.code);
+    const fs = gl.createShader(gl.FRAGMENT_SHADER)!;
+    gl.shaderSource(fs, source);
+    gl.compileShader(fs);
+    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+      const err = gl.getShaderInfoLog(fs);
+      console.error("GLSL error:\n", err);
+      gl.deleteShader(fs);
+      return;
+    }
+
+    const vs = gl.createShader(gl.VERTEX_SHADER)!;
+    gl.shaderSource(vs, VERT);
+    gl.compileShader(vs);
+
+    const prog = gl.createProgram()!;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error("GLSL link error:", gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return;
+    }
+
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+
+    this.program = prog;
+    this.uLocs = {};
+    for (const name of ["iTime", "iResolution", "iMouse", "iFrame"]) {
+      this.uLocs[name] = gl.getUniformLocation(prog, name);
+    }
+  }
+
+  private setupQuad(): void {
+    const gl = this.gl!;
+    const buf = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  }
+
+  update(time: number, _dt: number): void {
+    const gl = this.gl;
+    const c = this.canvas;
+    if (!gl || !c || !this.program) return;
+
+    gl.viewport(0, 0, c.width, c.height);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.program);
+
+    const posLoc = gl.getAttribLocation(this.program, "a_pos");
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    if (this.uLocs.iTime != null) gl.uniform1f(this.uLocs.iTime, time);
+    if (this.uLocs.iResolution != null) gl.uniform2f(this.uLocs.iResolution, c.width, c.height);
+    if (this.uLocs.iFrame != null) gl.uniform1i(this.uLocs.iFrame, this.frame);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.frame++;
+  }
+
+  resize(w: number, h: number): void {
+    if (this.canvas) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+    }
+  }
+
+  destroy(): void {
+    if (this.gl && this.program) {
+      this.gl.deleteProgram(this.program);
+      this.program = null;
+    }
+  }
+}
