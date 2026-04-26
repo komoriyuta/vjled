@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";import { open } from "@tauri-apps/plugin-dialog";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
@@ -11,20 +12,25 @@ import { sendLedFrame } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
 import LedPanel from "../../components/LedPanel";
 
-const BG = "#111119";
-const PANEL = "#1a1a28";
-const ACCENT = "#7c5cfc";
-const ACCENT2 = "#fc5c7c";
-const TEXT = "#e0e0e8";
-const TEXT2 = "#888899";
-const BORDER = "#2a2a3a";
+const BG = "#090b10";
+const SURFACE = "#10141d";
+const SURFACE2 = "#171d28";
+const SURFACE3 = "#202838";
+const ACCENT = "#22d3ee";
+const ACCENT2 = "#fb7185";
+const TEXT = "#eef2ff";
+const TEXT2 = "#94a3b8";
+const BORDER = "#283244";
+const OK = "#34d399";
 
 const typeColors: Record<SceneType, string> = {
-  glsl: "#e74c3c",
-  p5: "#3498db",
-  threejs: "#2ecc71",
-  video: "#f39c12",
+  glsl: "#ef4444",
+  p5: "#38bdf8",
+  threejs: "#22c55e",
+  video: "#f59e0b",
 };
+
+type RightTab = "project" | "output" | "ai" | "led";
 
 function formatTime(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -48,67 +54,13 @@ export default function ControlApp() {
   const ledConfig = useLedStore((s) => s.config);
   const ledPoints = useLedStore((s) => s.calibrationPoints);
 
-  const handleSave = useCallback(async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Project", extensions: ["vjled.json"] }],
-        defaultPath: "project.vjled.json",
-      });
-      if (!selected) return;
-      const state = useVJStore.getState();
-      const led = useLedStore.getState();
-      const project = {
-        version: 1,
-        vj: {
-          scenes: state.scenes,
-          busA: state.busA,
-          busB: state.busB,
-          crossfade: state.crossfade,
-          isPlaying: state.isPlaying,
-          selectedSceneId: state.selectedSceneId,
-        },
-        led: {
-          config: led.config,
-          calibrationPoints: led.calibrationPoints,
-        },
-      };
-      await invoke("project_save", { path: selected as string, data: project });
-    } catch (e) {
-      console.error("Save failed:", e);
-    }
-  }, []);
-
-  const handleLoad = useCallback(async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Project", extensions: ["vjled.json", "json"] }],
-      });
-      if (!selected) return;
-      const project = await invoke<{ version: number; vj: unknown; led?: { config: unknown; calibrationPoints: unknown } }>("project_load", { path: selected as string });
-      if (project.vj) {
-        loadProject(project.vj as any);
-      }
-      if (project.led) {
-        ledLoadProject(
-          (project.led as any).config ?? useLedStore.getState().config,
-          (project.led as any).calibrationPoints ?? [],
-        );
-      }
-    } catch (e) {
-      console.error("Load failed:", e);
-    }
-  }, [loadProject, ledLoadProject]);
-
   const outputPreviewRef = useRef<HTMLDivElement>(null);
   const busACanvasRef = useRef<HTMLCanvasElement>(null);
   const busBCanvasRef = useRef<HTMLCanvasElement>(null);
   const selectedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ledFrameRef = useRef(0);
   const [outputDecorated, setOutputDecorated] = useState(false);
-  const [showLedPanel, setShowLedPanel] = useState(false);
-  const [showAiPanel, setShowAiPanel] = useState(false);
-  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [rightTab, setRightTab] = useState<RightTab>("output");
 
   const aiConfig = useAiStore((s) => s.config);
   const aiGenerating = useAiStore((s) => s.generating);
@@ -124,9 +76,63 @@ export default function ControlApp() {
     selectedPreviewRef: selectedCanvasRef,
   });
 
-  const ledFrameRef = useRef(0);
-
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
+  const busAScene = scenes.find((s) => s.id === busA);
+  const busBScene = scenes.find((s) => s.id === busB);
+  const monacoLang = selectedScene?.type === "glsl" ? "cpp" : "javascript";
+
+  const handleSave = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Project", extensions: ["vjled.json"] }],
+        defaultPath: "project.vjled.json",
+      });
+      if (!selected) return;
+      const state = useVJStore.getState();
+      const led = useLedStore.getState();
+      await invoke("project_save", {
+        path: selected as string,
+        data: {
+          version: 1,
+          vj: {
+            scenes: state.scenes,
+            busA: state.busA,
+            busB: state.busB,
+            crossfade: state.crossfade,
+            isPlaying: state.isPlaying,
+            selectedSceneId: state.selectedSceneId,
+          },
+          led: {
+            config: led.config,
+            calibrationPoints: led.calibrationPoints,
+          },
+        },
+      });
+    } catch (e) {
+      console.error("Save failed:", e);
+    }
+  }, []);
+
+  const handleLoad = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Project", extensions: ["vjled.json", "json"] }],
+      });
+      if (!selected) return;
+      const project = await invoke<{ version: number; vj: unknown; led?: { config: unknown; calibrationPoints: unknown } }>("project_load", { path: selected as string });
+      if (project.vj) loadProject(project.vj as any);
+      if (project.led) {
+        ledLoadProject(
+          (project.led as any).config ?? useLedStore.getState().config,
+          (project.led as any).calibrationPoints ?? [],
+        );
+      }
+    } catch (e) {
+      console.error("Load failed:", e);
+    }
+  }, [loadProject, ledLoadProject]);
 
   const handleAiGenerate = useCallback(async (sceneType: SceneType, prompt: string) => {
     try {
@@ -170,21 +176,17 @@ export default function ControlApp() {
     if (!ledConfig.enabled || ledPoints.length === 0) return;
     let running = true;
     let lastSend = 0;
-    const LED_FPS = 30;
-    const interval = 1000 / LED_FPS;
+    const interval = 1000 / 30;
 
     const loop = () => {
       if (!running) return;
       const now = performance.now();
       if (now - lastSend >= interval) {
         lastSend = now;
-        const container = outputPreviewRef.current;
-        const canvas = container?.querySelector("canvas") as HTMLCanvasElement | null;
-        if (canvas) {
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
-          }
+        const canvas = outputPreviewRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
+        const ctx = canvas?.getContext("2d");
+        if (canvas && ctx) {
+          sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
         }
       }
       ledFrameRef.current = requestAnimationFrame(loop);
@@ -210,17 +212,7 @@ export default function ControlApp() {
       });
     };
 
-    const unsub = useVJStore.subscribe((state) => {
-      emitVJState({
-        scenes: state.scenes,
-        busA: state.busA,
-        busB: state.busB,
-        crossfade: state.crossfade,
-        isPlaying: state.isPlaying,
-        selectedSceneId: state.selectedSceneId,
-      });
-    });
-
+    const unsub = useVJStore.subscribe(publishState);
     const unlistenRequest = listenVJStateRequest(publishState);
     publishState();
 
@@ -261,240 +253,99 @@ export default function ControlApp() {
     try {
       const selected = await open({
         multiple: false,
-        filters: [{
-          name: "Video",
-          extensions: ["mp4", "webm", "mov", "avi", "mkv", "ogv"],
-        }],
+        filters: [{ name: "Video", extensions: ["mp4", "webm", "mov", "avi", "mkv", "ogv"] }],
       });
       if (selected) {
-        const filePath = selected as string;
-        const src = convertFileSrc(filePath);
-        updateSceneCode(selectedSceneId, src);
+        updateSceneCode(selectedSceneId, convertFileSrc(selected as string));
       }
     } catch {}
   }
-
-  const busAScene = scenes.find((s) => s.id === busA);
-  const busBScene = scenes.find((s) => s.id === busB);
-
-  const monacoLang = selectedScene?.type === "glsl" ? "cpp" : "javascript";
 
   const canvasStyle: React.CSSProperties = {
     maxWidth: "100%",
     maxHeight: "100%",
     objectFit: "contain",
     display: "block",
-    borderRadius: 4,
+    borderRadius: 8,
   };
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: BG, color: TEXT, fontFamily: "-apple-system, system-ui, sans-serif", fontSize: 13 }}>
-      {/* LEFT: Scene Library */}
-      <div style={{ width: 200, borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: TEXT2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>Scenes</span>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={handleSave} style={{ background: "none", border: `1px solid ${BORDER}`, color: TEXT2, fontSize: 9, borderRadius: 3, padding: "1px 6px", cursor: "pointer" }}>Save</button>
-            <button onClick={handleLoad} style={{ background: "none", border: `1px solid ${BORDER}`, color: TEXT2, fontSize: 9, borderRadius: 3, padding: "1px 6px", cursor: "pointer" }}>Load</button>
-          </div>
+    <div style={{ display: "grid", gridTemplateColumns: "220px minmax(420px, 1fr) 300px", height: "100vh", overflow: "hidden", background: BG, color: TEXT, fontFamily: "Avenir Next, ui-sans-serif, system-ui, sans-serif", fontSize: 13 }}>
+      <aside style={{ borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
+        <PanelHeader title="Scenes" subtitle={`${scenes.length} sources`} />
+        <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
+          {scenes.map((scene) => (
+            <SceneItem
+              key={scene.id}
+              scene={scene}
+              selected={selectedSceneId === scene.id}
+              onA={busA === scene.id}
+              onB={busB === scene.id}
+              onSelect={() => selectScene(scene.id)}
+              onDelete={() => removeScene(scene.id)}
+              onAssign={(bus) => assignScene(scene.id, bus)}
+            />
+          ))}
+          {scenes.length === 0 && (
+            <EmptyState title="No scenes" body="Create GLSL, p5, Three.js, or Video sources from the bottom bar." />
+          )}
         </div>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 6px" }}>
-          {scenes.map((s) => {
-            const isOnA = busA === s.id;
-            const isOnB = busB === s.id;
-            const isSelected = selectedSceneId === s.id;
-            return (
-              <div
-                key={s.id}
-                onClick={() => selectScene(s.id)}
-                style={{
-                  padding: "6px 8px",
-                  marginBottom: 2,
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  background: isSelected ? PANEL : "transparent",
-                  border: isSelected ? `1px solid ${ACCENT}` : "1px solid transparent",
-                  transition: "all 0.1s",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: typeColors[s.type], flexShrink: 0 }} />
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); removeScene(s.id); }}
-                    style={{ background: "none", border: "none", color: TEXT2, cursor: "pointer", fontSize: 11, padding: "0 2px" }}
-                    title="Delete"
-                  >
-                    x
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                  <BusButton label="A" active={isOnA} color={ACCENT} onClick={() => assignScene(s.id, "A")} />
-                  <BusButton label="B" active={isOnB} color={ACCENT2} onClick={() => assignScene(s.id, "B")} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div style={{ padding: 6, display: "flex", gap: 4, flexWrap: "wrap", borderTop: `1px solid ${BORDER}` }}>
+        <div style={{ padding: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, borderTop: `1px solid ${BORDER}` }}>
           {(Object.keys(typeColors) as SceneType[]).map((type) => (
-            <button
-              key={type}
-              onClick={() => addScene(type)}
-              style={{
-                padding: "3px 7px",
-                background: typeColors[type],
-                color: "#fff",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 10,
-                fontWeight: 700,
-              }}
-            >
-              +{type === "threejs" ? "Three" : type.toUpperCase()}
+            <button key={type} onClick={() => addScene(type)} style={{ ...buttonBase, background: typeColors[type], borderColor: typeColors[type], color: "#fff" }}>
+              + {type === "threejs" ? "Three" : type.toUpperCase()}
             </button>
           ))}
         </div>
-        <div style={{ borderTop: `1px solid ${BORDER}`, padding: 6, flexShrink: 0 }}>
-          <button
-            onClick={() => setShowAiPanel(!showAiPanel)}
-            style={{
-              width: "100%",
-              padding: "4px 8px",
-              background: showAiPanel ? ACCENT : PANEL,
-              border: `1px solid ${showAiPanel ? ACCENT : BORDER}`,
-              color: showAiPanel ? "#fff" : TEXT2,
-              borderRadius: 4,
-              cursor: "pointer",
-              fontSize: 10,
-              fontWeight: 700,
-              marginBottom: showAiPanel ? 6 : 0,
-            }}
-          >
-            AI Generate
-          </button>
-          {showAiPanel && (
-            <AiPromptArea
-              generating={aiGenerating}
-              error={aiError}
-              onGenerate={handleAiGenerate}
-              onEdit={selectedScene ? handleAiEdit : undefined}
-              onSettings={() => setShowAiSettings(!showAiSettings)}
-              showSettings={showAiSettings}
-              config={aiConfig}
-              onConfigChange={aiSetConfig}
-            />
-          )}
-        </div>
-      </div>
+      </aside>
 
-      {/* CENTER COLUMN */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      <main style={{ display: "grid", gridTemplateRows: "minmax(230px, 42vh) 118px 82px minmax(180px, 1fr)", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+        <section style={{ padding: 12, minHeight: 0 }}>
+          <PreviewFrame title="Program Output" meta={outputMeta(busAScene, busBScene, crossfade)} tone={ACCENT}>
+            <div ref={outputPreviewRef} style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }} />
+          </PreviewFrame>
+        </section>
 
-        {/* Row 1: Bus A / Bus B previews */}
-        <div style={{ display: "flex", gap: 8, padding: 8, height: 100, flexShrink: 0 }}>
-          <PreviewCard label="BUS A" scene={busAScene} color={ACCENT}>
+        <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, padding: "0 12px 10px", minHeight: 0 }}>
+          <PreviewFrame title="Bus A" meta={busAScene?.name ?? "empty"} tone={ACCENT}>
             <canvas ref={busACanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewCard>
-          <PreviewCard label="BUS B" scene={busBScene} color={ACCENT2}>
+          </PreviewFrame>
+          <PreviewFrame title="Bus B" meta={busBScene?.name ?? "empty"} tone={ACCENT2}>
             <canvas ref={busBCanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewCard>
-        </div>
-
-        {/* Row 2: Scene Preview / Output Preview */}
-        <div style={{ display: "flex", gap: 8, padding: "0 8px", height: 120, flexShrink: 0 }}>
-          <PreviewCard label="Scene" scene={selectedScene ?? undefined} color={TEXT}>
+          </PreviewFrame>
+          <PreviewFrame title="Selected" meta={selectedScene?.name ?? "none"} tone={selectedScene ? typeColors[selectedScene.type] : TEXT2}>
             <canvas ref={selectedCanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewCard>
-          <PreviewCard label="Output" scene={undefined} color={TEXT} extra={
-            <div style={{ display: "flex", gap: 4 }}>
-              <button
-                onClick={() => setShowLedPanel(!showLedPanel)}
-                style={{
-                  background: showLedPanel ? ACCENT : "none",
-                  border: `1px solid ${showLedPanel ? ACCENT : BORDER}`,
-                  color: showLedPanel ? "#fff" : TEXT2,
-                  fontSize: 9,
-                  borderRadius: 3,
-                  padding: "1px 6px",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                LED
-              </button>
-              <button
-                onClick={openLedMapping}
-                style={{
-                  background: "none",
-                  border: `1px solid ${BORDER}`,
-                  color: TEXT2,
-                  fontSize: 9,
-                  borderRadius: 3,
-                  padding: "1px 6px",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Map
-              </button>
-              <button
-                onClick={toggleOutputDecorations}
-                style={{
-                  background: "none",
-                  border: `1px solid ${BORDER}`,
-                  color: TEXT2,
-                  fontSize: 9,
-                  borderRadius: 3,
-                  padding: "1px 6px",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {outputDecorated ? "Hide Bar" : "Show Bar"}
-              </button>
+          </PreviewFrame>
+        </section>
+
+        <section style={{ padding: "0 12px 10px" }}>
+          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <VJButton onClick={cutToA}>CUT A</VJButton>
+              <VJButton onClick={fadeToA}>FADE A</VJButton>
             </div>
-          }>
-            <div
-              ref={outputPreviewRef}
-              style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 0 }}
-            />
-          </PreviewCard>
-        </div>
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", color: TEXT2, fontWeight: 800, fontSize: 10, letterSpacing: 1, textTransform: "uppercase", marginBottom: 5 }}>
+                <span style={{ color: ACCENT }}>A</span>
+                <span>Crossfade {(crossfade * 100).toFixed(0)}%</span>
+                <span style={{ color: ACCENT2 }}>B</span>
+              </div>
+              <input type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => setCrossfade(parseFloat(e.target.value))} style={{ width: "100%", accentColor: ACCENT }} />
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <VJButton onClick={fadeToB}>FADE B</VJButton>
+              <VJButton onClick={cutToB}>CUT B</VJButton>
+              <VJButton onClick={() => setPlaying(!isPlaying)} accent={isPlaying}>{isPlaying ? "PAUSE" : "PLAY"}</VJButton>
+            </div>
+          </div>
+        </section>
 
-        {/* Row 3: Crossfader */}
-        <div style={{ padding: "6px 8px", flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: ACCENT, fontWeight: 700, fontSize: 12 }}>A</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.005}
-              value={crossfade}
-              onChange={(e) => setCrossfade(parseFloat(e.target.value))}
-              style={{ flex: 1, accentColor: ACCENT }}
-            />
-            <span style={{ color: ACCENT2, fontWeight: 700, fontSize: 12 }}>B</span>
+        <section style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <SectionTitle title={selectedScene ? `Edit ${selectedScene.name}` : "Editor"} />
+            {selectedScene && <span style={{ color: typeColors[selectedScene.type], fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>{selectedScene.type}</span>}
           </div>
-          <div style={{ display: "flex", gap: 4, marginTop: 4, justifyContent: "center" }}>
-            <VJButton onClick={cutToA}>CUT A</VJButton>
-            <VJButton onClick={cutToB}>CUT B</VJButton>
-            <VJButton onClick={fadeToA}>FADE A</VJButton>
-            <VJButton onClick={fadeToB}>FADE B</VJButton>
-            <VJButton onClick={() => setPlaying(!isPlaying)} accent={isPlaying}>
-              {isPlaying ? "PAUSE" : "PLAY"}
-            </VJButton>
-          </div>
-        </div>
-
-        {/* Row 4: Code Editor / Video Controls */}
-        <div style={{ flex: 1, padding: "0 8px 8px", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: TEXT2, marginBottom: 4, fontWeight: 700, flexShrink: 0 }}>
-            {selectedScene ? `Code: ${selectedScene.name} (${selectedScene.type})` : "Select a scene"}
-          </div>
-          <div style={{ flex: 1, borderRadius: 6, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
+          <div style={{ flex: 1, borderRadius: 12, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
             {selectedScene ? (
               selectedScene.type === "video" ? (
                 <VideoEditor scene={selectedScene} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} />
@@ -513,25 +364,244 @@ export default function ControlApp() {
                     wordWrap: "on",
                     tabSize: 2,
                     automaticLayout: true,
-                    padding: { top: 8 },
+                    padding: { top: 10 },
                   }}
                 />
               )
             ) : (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#1e1e1e", color: TEXT2 }}>
-                Select a scene to edit code
-              </div>
+              <EmptyState title="Select a scene" body="The selected source preview and editor will appear here." dark />
             )}
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
 
-      {/* RIGHT: LED Panel */}
-      {showLedPanel && (
-        <div style={{ width: 240, borderLeft: `1px solid ${BORDER}`, flexShrink: 0 }}>
-          <LedPanel />
+      <aside style={{ borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
+        <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}` }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            {(["project", "output", "ai", "led"] as RightTab[]).map((tab) => (
+              <button key={tab} onClick={() => setRightTab(tab)} style={{ ...buttonBase, background: rightTab === tab ? ACCENT : SURFACE2, borderColor: rightTab === tab ? ACCENT : BORDER, color: rightTab === tab ? "#001018" : TEXT2 }}>
+                {tab.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          {rightTab === "project" && <ProjectPanel onSave={handleSave} onLoad={handleLoad} scenes={scenes} selectedScene={selectedScene} />}
+          {rightTab === "output" && (
+            <OutputPanel
+              busAScene={busAScene}
+              busBScene={busBScene}
+              crossfade={crossfade}
+              isPlaying={isPlaying}
+              outputDecorated={outputDecorated}
+              onToggleDecorations={toggleOutputDecorations}
+              onOpenLedMapping={openLedMapping}
+            />
+          )}
+          {rightTab === "ai" && (
+            <AiPanel
+              generating={aiGenerating}
+              error={aiError}
+              onGenerate={handleAiGenerate}
+              onEdit={selectedScene ? handleAiEdit : undefined}
+              config={aiConfig}
+              onConfigChange={aiSetConfig}
+              selectedScene={selectedScene}
+            />
+          )}
+          {rightTab === "led" && (
+            <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+              <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}`, background: SURFACE2 }}>
+                <SectionTitle title="LED Projection" />
+                <p style={helpText}>Single-camera mapping is used here. Python's second source camera is intentionally replaced by the VJ program output canvas.</p>
+                <button onClick={openLedMapping} style={{ ...buttonBase, width: "100%", marginTop: 8, background: SURFACE3, color: TEXT }}>
+                  Open Mapping Window
+                </button>
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <LedPanel />
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function outputMeta(a: Scene | undefined, b: Scene | undefined, crossfade: number): string {
+  if (!a && !b) return "no buses assigned";
+  if (crossfade <= 0.01) return a?.name ?? "Bus A empty";
+  if (crossfade >= 0.99) return b?.name ?? "Bus B empty";
+  return `${a?.name ?? "empty"} + ${b?.name ?? "empty"}`;
+}
+
+function PanelHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <div style={{ padding: 12, borderBottom: `1px solid ${BORDER}` }}>
+      <div style={{ fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase", fontSize: 12 }}>{title}</div>
+      {subtitle && <div style={{ marginTop: 3, color: TEXT2, fontSize: 11 }}>{subtitle}</div>}
+    </div>
+  );
+}
+
+function SectionTitle({ title }: { title: string }) {
+  return <div style={{ color: TEXT, fontWeight: 900, fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>{title}</div>;
+}
+
+function EmptyState({ title, body, dark }: { title: string; body: string; dark?: boolean }) {
+  return (
+    <div style={{ height: "100%", minHeight: 90, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 14, background: dark ? "#1e1e1e" : "transparent" }}>
+      <div style={{ color: TEXT, fontWeight: 800, fontSize: 12 }}>{title}</div>
+      <div style={{ color: TEXT2, fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>{body}</div>
+    </div>
+  );
+}
+
+function SceneItem({ scene, selected, onA, onB, onSelect, onDelete, onAssign }: {
+  scene: Scene;
+  selected: boolean;
+  onA: boolean;
+  onB: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+  onAssign: (bus: BusLabel) => void;
+}) {
+  return (
+    <div onClick={onSelect} style={{ padding: 9, marginBottom: 7, borderRadius: 12, cursor: "pointer", background: selected ? SURFACE3 : SURFACE2, border: `1px solid ${selected ? typeColors[scene.type] : BORDER}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: typeColors[scene.type], flexShrink: 0 }} />
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 800 }}>{scene.name}</span>
+        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ ...iconButton, color: TEXT2 }} title="Delete">x</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+        <BusButton label="A" active={onA} color={ACCENT} onClick={(e) => { e.stopPropagation(); onAssign("A"); }} />
+        <BusButton label="B" active={onB} color={ACCENT2} onClick={(e) => { e.stopPropagation(); onAssign("B"); }} />
+      </div>
+    </div>
+  );
+}
+
+function PreviewFrame({ title, meta, tone, children }: { title: string; meta: string; tone: string; children: React.ReactNode }) {
+  return (
+    <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 8, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, height: 20, marginBottom: 6 }}>
+        <span style={{ width: 6, height: 6, borderRadius: 999, background: tone }} />
+        <span style={{ color: TEXT, fontWeight: 900, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>{title}</span>
+        <span style={{ color: TEXT2, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta}</span>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: 10, overflow: "hidden" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ProjectPanel({ onSave, onLoad, scenes, selectedScene }: { onSave: () => void; onLoad: () => void; scenes: Scene[]; selectedScene: Scene | null }) {
+  return (
+    <div style={panelBody}>
+      <SectionTitle title="Project" />
+      <p style={helpText}>Save/load now lives outside previews. Project data includes VJ buses, scenes, LED config, and calibration points.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <button onClick={onSave} style={{ ...buttonBase, background: ACCENT, borderColor: ACCENT, color: "#001018" }}>Save</button>
+        <button onClick={onLoad} style={{ ...buttonBase, background: SURFACE3, color: TEXT }}>Load</button>
+      </div>
+      <InfoGrid rows={[
+        ["Scenes", String(scenes.length)],
+        ["Selected", selectedScene?.name ?? "None"],
+        ["Type", selectedScene?.type ?? "-"],
+      ]} />
+    </div>
+  );
+}
+
+function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorated, onToggleDecorations, onOpenLedMapping }: {
+  busAScene: Scene | undefined;
+  busBScene: Scene | undefined;
+  crossfade: number;
+  isPlaying: boolean;
+  outputDecorated: boolean;
+  onToggleDecorations: () => void;
+  onOpenLedMapping: () => void;
+}) {
+  return (
+    <div style={panelBody}>
+      <SectionTitle title="Output Window" />
+      <InfoGrid rows={[
+        ["Status", isPlaying ? "Playing" : "Paused"],
+        ["Bus A", busAScene?.name ?? "Empty"],
+        ["Bus B", busBScene?.name ?? "Empty"],
+        ["Mix", `${(crossfade * 100).toFixed(0)}% B`],
+        ["Title bar", outputDecorated ? "Visible" : "Hidden"],
+      ]} />
+      <button onClick={onToggleDecorations} style={{ ...buttonBase, width: "100%", background: SURFACE3, color: TEXT }}>
+        {outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}
+      </button>
+      <button onClick={onOpenLedMapping} style={{ ...buttonBase, width: "100%", background: SURFACE3, color: TEXT }}>
+        Open LED Mapping
+      </button>
+      <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
+        <SectionTitle title="Python parity" />
+        <p style={helpText}>UDP packet flow, brightness/gain curve, project calibration data, and auto calibration match the Python design. Person detection and two-camera floor/source mapping are not implemented in this UI yet; the VJ output replaces the source camera by design.</p>
+      </div>
+    </div>
+  );
+}
+
+function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene }: {
+  generating: boolean;
+  error: string | null;
+  onGenerate: (type: SceneType, prompt: string) => void;
+  onEdit?: (prompt: string) => void;
+  config: { baseUrl: string; apiKey: string; model: string };
+  onConfigChange: (c: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
+  selectedScene: Scene | null;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [selectedType, setSelectedType] = useState<SceneType>("glsl");
+  const [showSettings, setShowSettings] = useState(false);
+
+  return (
+    <div style={panelBody}>
+      <SectionTitle title="AI Generate" />
+      <p style={helpText}>Generate a new source or edit the selected scene without mixing AI controls into the scene list.</p>
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+        {(["glsl", "p5", "threejs"] as SceneType[]).map((type) => (
+          <button key={type} onClick={() => setSelectedType(type)} style={{ ...buttonBase, background: selectedType === type ? typeColors[type] : SURFACE2, borderColor: selectedType === type ? typeColors[type] : BORDER, color: selectedType === type ? "#fff" : TEXT2 }}>
+            {type === "threejs" ? "Three" : type.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Describe the visual effect..."
+        rows={6}
+        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && prompt.trim() && !generating) {
+            e.preventDefault();
+            onGenerate(selectedType, prompt.trim());
+          }
+        }}
+      />
+      <button disabled={generating || !prompt.trim() || !config.apiKey} onClick={() => onGenerate(selectedType, prompt.trim())} style={primaryButton(generating || !prompt.trim() || !config.apiKey)}>
+        {generating ? "Generating..." : "Generate New Scene"}
+      </button>
+      <button disabled={!onEdit || generating || !prompt.trim() || !config.apiKey} onClick={() => onEdit?.(prompt.trim())} style={secondaryButton(!onEdit || generating || !prompt.trim() || !config.apiKey)}>
+        {selectedScene ? `Edit ${selectedScene.name}` : "Select Scene To Edit"}
+      </button>
+      <button onClick={() => setShowSettings(!showSettings)} style={{ ...buttonBase, background: "transparent", color: TEXT2, borderColor: BORDER }}>
+        {showSettings ? "Hide API Settings" : "API Settings"}
+      </button>
+      {showSettings && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 10, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
+          <LabeledInput label="Base URL" value={config.baseUrl} onChange={(value) => onConfigChange({ baseUrl: value })} placeholder="https://api.openai.com/v1" />
+          <LabeledInput label="API Key" type="password" value={config.apiKey} onChange={(value) => onConfigChange({ apiKey: value })} placeholder="sk-..." />
+          <LabeledInput label="Model" value={config.model} onChange={(value) => onConfigChange({ model: value })} placeholder="gpt-4o" />
         </div>
       )}
+      {error && <div style={{ padding: 8, background: "#3a1515", borderRadius: 8, fontSize: 11, color: "#fca5a5", maxHeight: 80, overflow: "auto" }}>{error}</div>}
     </div>
   );
 }
@@ -564,109 +634,41 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
     return () => clearInterval(interval);
   }, [scene.id, getVideoInfo]);
 
-  const togglePlay = () => {
-    sendCommand(scene.id, playing ? "pause" : "play", undefined);
-  };
-
-  const toggleLoop = () => {
-    sendCommand(scene.id, "loop", !loop);
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    sendCommand(scene.id, "seek", parseFloat(e.target.value));
-  };
-
-  const setInPoint = () => {
-    sendCommand(scene.id, "loopStart", currentTime);
-  };
-
-  const setOutPoint = () => {
-    sendCommand(scene.id, "loopEnd", currentTime);
-  };
-
-  const resetLoopPoints = () => {
-    sendCommand(scene.id, "loopStart", 0);
-    sendCommand(scene.id, "loopEnd", -1);
-  };
-
-  const seekToLoopStart = () => {
-    sendCommand(scene.id, "seek", loopStart);
-  };
-
   const hasVideo = !!scene.code;
 
   return (
-    <div style={{ height: "100%", background: "#1e1e1e", display: "flex", flexDirection: "column", padding: 16, gap: 10 }}>
-      {/* File section */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <div style={{ height: "100%", background: "#1e1e1e", display: "flex", flexDirection: "column", padding: 18, gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <span style={{ color: typeColors.video, fontSize: 20, flexShrink: 0 }}>&#9654;</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {hasVideo ? (
-            <div style={{ color: TEXT, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {scene.code}
-            </div>
-          ) : (
-            <div style={{ color: TEXT2, fontSize: 12 }}>No video selected</div>
-          )}
+        <div style={{ flex: 1, minWidth: 0, color: hasVideo ? TEXT : TEXT2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {hasVideo ? scene.code : "No video selected"}
         </div>
-        <button onClick={onPick} style={{ background: typeColors.video, color: "#fff", border: "none", borderRadius: 6, padding: "6px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+        <button onClick={onPick} style={{ ...buttonBase, background: typeColors.video, borderColor: typeColors.video, color: "#fff" }}>
           {hasVideo ? "Change" : "Choose File"}
         </button>
       </div>
-
-      {/* Controls */}
       {hasVideo && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* Transport */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={togglePlay} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 4, padding: "4px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-              {playing ? "\u275A\u275A" : "\u25B6"}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => sendCommand(scene.id, playing ? "pause" : "play", undefined)} style={{ ...buttonBase, background: SURFACE3, color: TEXT }}>
+              {playing ? "PAUSE" : "PLAY"}
             </button>
-            <button onClick={toggleLoop} style={{ background: loop ? ACCENT : PANEL, border: `1px solid ${loop ? ACCENT : BORDER}`, color: loop ? "#fff" : TEXT2, borderRadius: 4, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            <button onClick={() => sendCommand(scene.id, "loop", !loop)} style={{ ...buttonBase, background: loop ? ACCENT : SURFACE3, borderColor: loop ? ACCENT : BORDER, color: loop ? "#001018" : TEXT2 }}>
               {loop ? "LOOP" : "ONCE"}
             </button>
-            <span style={{ color: TEXT2, fontSize: 11, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ color: TEXT2, fontSize: 12, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
           </div>
-
-          {/* Seek bar */}
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.01}
-            value={currentTime}
-            onChange={handleSeek}
-            style={{ width: "100%", accentColor: typeColors.video }}
-          />
-
-          {/* AB Loop controls */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: "#4ecdc4", fontSize: 10, fontWeight: 700 }}>A</span>
-            <button onClick={setInPoint} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 3, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-              Set In
-            </button>
-            <span style={{ color: "#4ecdc4", fontSize: 11, fontVariantNumeric: "tabular-nums", minWidth: 42 }}>
-              {formatTime(loopStart)}
-            </span>
-
-            <span style={{ color: TEXT2, fontSize: 10, fontWeight: 700 }}>-</span>
-
-            <span style={{ color: ACCENT2, fontSize: 11, fontVariantNumeric: "tabular-nums", minWidth: 42 }}>
-              {formatTime(loopEnd)}
-            </span>
-            <button onClick={setOutPoint} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 3, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
-              Set Out
-            </button>
-            <span style={{ color: ACCENT2, fontSize: 10, fontWeight: 700 }}>B</span>
-
-            <button onClick={seekToLoopStart} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT2, borderRadius: 3, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginLeft: 4 }}>
-              Go A
-            </button>
-            <button onClick={resetLoopPoints} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT2, borderRadius: 3, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>
-              Reset
-            </button>
+          <input type="range" min={0} max={duration || 0} step={0.01} value={currentTime} onChange={(e) => sendCommand(scene.id, "seek", parseFloat(e.target.value))} style={{ width: "100%", accentColor: typeColors.video }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => sendCommand(scene.id, "loopStart", currentTime)} style={secondaryButton(false)}>Set In</button>
+            <span style={{ color: OK, fontVariantNumeric: "tabular-nums" }}>{formatTime(loopStart)}</span>
+            <span style={{ color: TEXT2 }}>-</span>
+            <span style={{ color: ACCENT2, fontVariantNumeric: "tabular-nums" }}>{formatTime(loopEnd)}</span>
+            <button onClick={() => sendCommand(scene.id, "loopEnd", currentTime)} style={secondaryButton(false)}>Set Out</button>
+            <button onClick={() => sendCommand(scene.id, "seek", loopStart)} style={secondaryButton(false)}>Go In</button>
+            <button onClick={() => { sendCommand(scene.id, "loopStart", 0); sendCommand(scene.id, "loopEnd", -1); }} style={secondaryButton(false)}>Reset</button>
           </div>
         </div>
       )}
@@ -674,43 +676,9 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
   );
 }
 
-function PreviewCard({ label, scene, color, children, extra }: { label: string; scene: Scene | undefined; color: string; children: React.ReactNode; extra?: React.ReactNode }) {
+function BusButton({ label, active, color, onClick }: { label: string; active: boolean; color: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void }) {
   return (
-    <div style={{ flex: 1, background: PANEL, borderRadius: 6, padding: 6, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, height: 14, lineHeight: "14px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ color, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>{label}</span>
-          {scene && (
-            <span style={{ color: TEXT2, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 120 }}>
-              {scene.name}
-            </span>
-          )}
-        </div>
-        {extra}
-      </div>
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: 4, overflow: "hidden", minHeight: 0 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function BusButton({ label, active, color, onClick }: { label: string; active: boolean; color: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "1px 8px",
-        fontSize: 10,
-        fontWeight: 700,
-        borderRadius: 3,
-        cursor: "pointer",
-        border: active ? `1px solid ${color}` : `1px solid ${BORDER}`,
-        background: active ? color : "transparent",
-        color: active ? "#fff" : TEXT2,
-        transition: "all 0.1s",
-      }}
-    >
+    <button onClick={onClick} style={{ ...buttonBase, padding: "4px 8px", background: active ? color : "transparent", borderColor: active ? color : BORDER, color: active ? "#001018" : TEXT2 }}>
       {label}
     </button>
   );
@@ -718,162 +686,107 @@ function BusButton({ label, active, color, onClick }: { label: string; active: b
 
 function VJButton({ onClick, children, accent }: { onClick: () => void; children: React.ReactNode; accent?: boolean }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "4px 12px",
-        fontSize: 11,
-        fontWeight: 700,
-        borderRadius: 4,
-        cursor: "pointer",
-        border: `1px solid ${BORDER}`,
-        background: accent ? ACCENT : PANEL,
-        color: accent ? "#fff" : TEXT,
-        transition: "all 0.1s",
-      }}
-    >
+    <button onClick={onClick} style={{ ...buttonBase, background: accent ? ACCENT : SURFACE3, borderColor: accent ? ACCENT : BORDER, color: accent ? "#001018" : TEXT }}>
       {children}
     </button>
   );
 }
 
-function AiPromptArea({ generating, error, onGenerate, onEdit, onSettings, showSettings, config, onConfigChange }: {
-  generating: boolean;
-  error: string | null;
-  onGenerate: (type: SceneType, prompt: string) => void;
-  onEdit?: (prompt: string) => void;
-  onSettings: () => void;
-  showSettings: boolean;
-  config: { baseUrl: string; apiKey: string; model: string };
-  onConfigChange: (c: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
-}) {
-  const [prompt, setPrompt] = useState("");
-  const [selectedType, setSelectedType] = useState<SceneType>("glsl");
-
-  const inputStyle: React.CSSProperties = {
-    width: "100%",
-    background: "#0d0d15",
-    border: `1px solid ${BORDER}`,
-    borderRadius: 3,
-    color: TEXT,
-    padding: "4px 6px",
-    fontSize: 11,
-    boxSizing: "border-box",
-  };
-
-  const labelStyle: React.CSSProperties = {
-    fontSize: 9,
-    fontWeight: 700,
-    color: TEXT2,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  };
-
+function InfoGrid({ rows }: { rows: [string, string][] }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-        {(["glsl", "p5", "threejs"] as SceneType[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setSelectedType(t)}
-            style={{
-              padding: "2px 6px",
-              background: selectedType === t ? typeColors[t] : "transparent",
-              color: selectedType === t ? "#fff" : TEXT2,
-              border: `1px solid ${selectedType === t ? typeColors[t] : BORDER}`,
-              borderRadius: 3,
-              cursor: "pointer",
-              fontSize: 9,
-              fontWeight: 700,
-            }}
-          >
-            {t === "threejs" ? "Three" : t.toUpperCase()}
-          </button>
-        ))}
-      </div>
-
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Describe the visual effect..."
-        rows={2}
-        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && prompt.trim() && !generating) {
-            e.preventDefault();
-            onGenerate(selectedType, prompt.trim());
-          }
-        }}
-      />
-
-      <div style={{ display: "flex", gap: 4 }}>
-        <button
-          disabled={generating || !prompt.trim() || !config.apiKey}
-          onClick={() => onGenerate(selectedType, prompt.trim())}
-          style={{
-            flex: 1,
-            padding: "3px 8px",
-            background: generating ? TEXT2 : ACCENT,
-            color: "#fff",
-            border: "none",
-            borderRadius: 3,
-            cursor: generating || !prompt.trim() || !config.apiKey ? "not-allowed" : "pointer",
-            fontSize: 10,
-            fontWeight: 700,
-            opacity: generating || !config.apiKey ? 0.5 : 1,
-          }}
-        >
-          {generating ? "Generating..." : "Generate New"}
-        </button>
-        {onEdit && (
-          <button
-            disabled={generating || !prompt.trim() || !config.apiKey}
-            onClick={() => onEdit(prompt.trim())}
-            style={{
-              flex: 1,
-              padding: "3px 8px",
-              background: PANEL,
-              color: generating || !config.apiKey ? TEXT2 : TEXT,
-              border: `1px solid ${BORDER}`,
-              borderRadius: 3,
-              cursor: generating || !prompt.trim() || !config.apiKey ? "not-allowed" : "pointer",
-              fontSize: 10,
-              fontWeight: 700,
-              opacity: generating || !config.apiKey ? 0.5 : 1,
-            }}
-          >
-            {generating ? "..." : "Edit Current"}
-          </button>
-        )}
-      </div>
-
-      <button onClick={onSettings} style={{ background: "none", border: "none", color: TEXT2, fontSize: 9, cursor: "pointer", textAlign: "left", padding: 0 }}>
-        {showSettings ? "Hide Settings" : "API Settings"}
-      </button>
-
-      {showSettings && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, background: "#0d0d15", borderRadius: 4, padding: 6 }}>
-          <div>
-            <div style={labelStyle}>Base URL</div>
-            <input style={inputStyle} value={config.baseUrl} onChange={(e) => onConfigChange({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
-          </div>
-          <div>
-            <div style={labelStyle}>API Key</div>
-            <input type="password" style={inputStyle} value={config.apiKey} onChange={(e) => onConfigChange({ apiKey: e.target.value })} placeholder="sk-..." />
-          </div>
-          <div>
-            <div style={labelStyle}>Model</div>
-            <input style={inputStyle} value={config.model} onChange={(e) => onConfigChange({ model: e.target.value })} placeholder="gpt-4o" />
-          </div>
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden" }}>
+      {rows.map(([label, value]) => (
+        <div key={label} style={{ display: "grid", gridTemplateColumns: "86px 1fr", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BORDER}`, background: SURFACE2 }}>
+          <span style={{ color: TEXT2, fontSize: 10, fontWeight: 900, textTransform: "uppercase", letterSpacing: 0.8 }}>{label}</span>
+          <span style={{ color: TEXT, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
         </div>
-      )}
-
-      {error && (
-        <div style={{ background: "#3a1515", borderRadius: 3, padding: 4, fontSize: 9, color: "#ff6b6b", maxHeight: 40, overflow: "auto" }}>
-          {error}
-        </div>
-      )}
+      ))}
     </div>
   );
+}
+
+function LabeledInput({ label, value, onChange, placeholder, type = "text" }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <label>
+      <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{label}</div>
+      <input type={type} style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+    </label>
+  );
+}
+
+const buttonBase: React.CSSProperties = {
+  border: `1px solid ${BORDER}`,
+  borderRadius: 8,
+  padding: "6px 10px",
+  background: SURFACE2,
+  color: TEXT,
+  cursor: "pointer",
+  fontSize: 10,
+  fontWeight: 900,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
+};
+
+const iconButton: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  fontSize: 13,
+  padding: "0 2px",
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  background: "#0c111a",
+  border: `1px solid ${BORDER}`,
+  borderRadius: 8,
+  color: TEXT,
+  padding: "8px 9px",
+  fontSize: 12,
+  boxSizing: "border-box",
+};
+
+const panelBody: React.CSSProperties = {
+  height: "100%",
+  boxSizing: "border-box",
+  overflowY: "auto",
+  padding: 12,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const helpText: React.CSSProperties = {
+  color: TEXT2,
+  fontSize: 11,
+  lineHeight: 1.5,
+  margin: 0,
+};
+
+function primaryButton(disabled: boolean): React.CSSProperties {
+  return {
+    ...buttonBase,
+    width: "100%",
+    background: disabled ? SURFACE3 : ACCENT,
+    borderColor: disabled ? BORDER : ACCENT,
+    color: disabled ? TEXT2 : "#001018",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.55 : 1,
+  };
+}
+
+function secondaryButton(disabled: boolean): React.CSSProperties {
+  return {
+    ...buttonBase,
+    background: SURFACE3,
+    color: disabled ? TEXT2 : TEXT,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.55 : 1,
+  };
 }
