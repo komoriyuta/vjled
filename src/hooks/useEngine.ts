@@ -1,18 +1,9 @@
 import { useRef, useEffect, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
 import type { Scene } from "../types";
 import type { Renderer } from "../renderers/types";
 import { createRenderer } from "../renderers/index";
 import { Compositor } from "../renderers/compositor";
-
-interface VJStatePayload {
-  scenes: Scene[];
-  busA: string | null;
-  busB: string | null;
-  crossfade: number;
-  isPlaying: boolean;
-  selectedSceneId: string | null;
-}
+import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
 
 interface UseEngineOptions {
   outputContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -27,6 +18,15 @@ function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null
   const ctx = dst.getContext("2d");
   if (!ctx) return;
   ctx.drawImage(src, 0, 0, dst.width, dst.height);
+}
+
+function compactControlCommands(commands: { action: string; value: unknown }[]) {
+  const latest = new Map<string, { action: string; value: unknown }>();
+  for (const cmd of commands) {
+    const key = cmd.action === "play" || cmd.action === "pause" ? "transport" : cmd.action;
+    latest.set(key, cmd);
+  }
+  return Array.from(latest.values());
 }
 
 export function useEngine(opts: UseEngineOptions) {
@@ -47,6 +47,7 @@ export function useEngine(opts: UseEngineOptions) {
   const t0Ref = useRef(performance.now());
   const prevRef = useRef(0);
   const codeCacheRef = useRef<Map<string, string>>(new Map());
+  const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
 
   const scale = preview ? 0.25 : 1;
   const W = Math.round(1920 * scale);
@@ -72,10 +73,27 @@ export function useEngine(opts: UseEngineOptions) {
 
       const entry = { renderer: r, canvas: c };
       renderersRef.current.set(scene.id, entry);
+      for (const cmd of controlCacheRef.current.get(scene.id) ?? []) {
+        r.control?.(cmd.action, cmd.value);
+      }
       return entry;
     },
     [W, H],
   );
+
+  const sendCommand = useCallback((sceneId: string, action: string, value: unknown) => {
+    const commands = controlCacheRef.current.get(sceneId) ?? [];
+    commands.push({ action, value });
+    controlCacheRef.current.set(sceneId, compactControlCommands(commands));
+    const entry = renderersRef.current.get(sceneId);
+    entry?.renderer.control?.(action, value);
+    emitVideoCmd({ sceneId, action, value });
+  }, []);
+
+  const getVideoInfo = useCallback((sceneId: string) => {
+    const entry = renderersRef.current.get(sceneId);
+    return entry?.renderer.getVideoInfo?.() ?? null;
+  }, []);
 
   useEffect(() => {
     const container = outputContainerRef.current;
@@ -84,7 +102,6 @@ export function useEngine(opts: UseEngineOptions) {
     const compCanvas = document.createElement("canvas");
     compCanvas.width = W;
     compCanvas.height = H;
-
     compCanvas.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;";
     container.appendChild(compCanvas);
     compositorCanvasRef.current = compCanvas;
@@ -93,10 +110,10 @@ export function useEngine(opts: UseEngineOptions) {
     comp.init(compCanvas);
     compositorRef.current = comp;
 
-    const unlisten = listen<VJStatePayload>("vj-state", (ev) => {
-      stateRef.current = ev.payload;
+    const unlistenState = listenVJState((state) => {
+      stateRef.current = state;
 
-      const { scenes, busA, busB, selectedSceneId } = ev.payload;
+      const { scenes, busA, busB, selectedSceneId } = state;
       const activeIds = new Set<string>();
       if (busA) activeIds.add(busA);
       if (busB) activeIds.add(busB);
@@ -122,9 +139,22 @@ export function useEngine(opts: UseEngineOptions) {
         if (prevCode !== scene.code) {
           entry.renderer.setCode(scene.code);
           codeCacheRef.current.set(id, scene.code);
+          for (const cmd of controlCacheRef.current.get(id) ?? []) {
+            entry.renderer.control?.(cmd.action, cmd.value);
+          }
         }
       }
     });
+
+    const unlistenVideoCmd = listenVideoCmd(({ sceneId, action, value }) => {
+      const commands = controlCacheRef.current.get(sceneId) ?? [];
+      commands.push({ action, value });
+      controlCacheRef.current.set(sceneId, compactControlCommands(commands));
+      const entry = renderersRef.current.get(sceneId);
+      entry?.renderer.control?.(action, value);
+    });
+
+    requestVJState();
 
     let running = true;
     function loop() {
@@ -168,15 +198,19 @@ export function useEngine(opts: UseEngineOptions) {
     return () => {
       running = false;
       cancelAnimationFrame(rafRef.current);
-      unlisten.then((fn) => fn());
+      unlistenState.then((fn) => fn());
+      unlistenVideoCmd.then((fn) => fn());
       for (const [, e] of renderersRef.current) {
         e.renderer.destroy();
         e.canvas.remove();
       }
       renderersRef.current.clear();
       codeCacheRef.current.clear();
+      controlCacheRef.current.clear();
       compositorRef.current?.destroy();
       compositorCanvasRef.current?.remove();
     };
   }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef]);
+
+  return { sendCommand, getVideoInfo };
 }

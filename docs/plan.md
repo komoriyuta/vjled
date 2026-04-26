@@ -242,6 +242,45 @@ Bus B Scene → RendererB → offscreen canvas B ─┘
 - `core:window:allow-set-decorations`, `core:window:allow-is-decorated` 追加
 - `dialog:default`, `dialog:allow-open` 追加
 
+### 2026-04-24: p5.js 生成コード互換性修正
+
+**修正10: Markdownフェンス付きp5コードの実行失敗** (`renderers/p5/P5Renderer.ts`)
+- AI出力をそのまま貼ると ```` ``` ```` フェンスが `new Function` に渡り、構文エラーになるケースがあった
+- `setCode()` 入力時に先頭/末尾の Markdown コードフェンスを除去する正規化処理を追加
+
+**修正11: p5.js グローバルAPIの取りこぼし** (`renderers/p5/P5Renderer.ts`)
+- p5 v2 では `exp`, `floor`, `map`, `noise`, `color`, `push/pop`, `translate`, `rectMode` などが単一prototype列挙だけでは拾えないことがある
+- p5インスタンス自身からprototype chain全体まで走査して関数エイリアスを生成する方式に変更
+- `abs/sin/cos/exp/floor` 等は Math fallback、`map/constrain/random` は軽量fallbackも追加し、p5グローバルモード前提のAI生成コードを通しやすくした
+
+**修正12: p5.js イベント/resize時のグローバル同期** (`renderers/p5/P5Renderer.ts`)
+- `windowResized`, key/mouseイベント実行前に `width`, `height`, `mouseX`, `frameCount`, `windowWidth` などを同期
+- `deltaTime`, `mouseIsPressed`, `key`, `keyCode` もグローバル変数として追加
+
+**修正13: p5.js エイリアス生成時の予約語構文エラー** (`renderers/p5/P5Renderer.ts`)
+- p5 v2 の関数/プロパティ名に `break` が含まれ、`var break = ...` を生成して `SyntaxError: Unexpected token 'break'` が発生していた
+- JavaScript予約語をエイリアス生成対象から除外し、デフォルトp5シーンが実行できるように修正
+- `WEBGL`, `P2D`, `P2DHDR`, `WEBGL2`, `WEBGPU` など、p5インスタンス上に露出しない場合がある定数にはfallback値を追加
+
+**修正14: Tauriイベント同期の初回取り逃がしとブラウザ確認不能** (`events/vjEvents.ts`, `hooks/useEngine.ts`, `windows/control/ControlApp.tsx`)
+- Outputウィンドウが起動タイミングによって初回 `vj-state` を取り逃がす可能性があった
+- `vj-state-request` を追加し、各レンダリングエンジン起動時にControlウィンドウへ最新状態を要求する方式を追加
+- Tauri IPCがないブラウザ確認時はローカルDOMイベントにfallbackし、`listen/emit` のrejectでレンダリングループが止まらないようにした
+
+**確認: p5.js シーン互換スモークテスト**
+- ブラウザ上で `P5Renderer` に直接コードを流し、console errorなし + canvas描画ピクセルありを確認
+- 通過ケース: デフォルト風2D、Markdownフェンス付き、`noise/color/transform` グリッド、ユーザー提示のTechno Geometric系コード、`createCanvas(..., WEBGL)`、`createVector/random/colorMode(HSB)` + mouse event
+
+### 2026-04-24: Video Output ループ修正
+
+**修正15: Output側VideoRendererの終端ループ漏れ** (`renderers/video/VideoRenderer.ts`)
+- `timeupdate` だけで手動ループしていたため、動画終端で `ended` になった場合にOutput側が巻き戻し・再生しないケースがあった
+- フル尺ループはHTMLVideoElementのnative `loop` を使い、ABループ時は `timeupdate` / `ended` / `update()` の3箇所で終端を検知して `loopStart` に戻すよう修正
+
+**修正16: Video command のレンダラ生成前取り逃がし** (`hooks/useEngine.ts`)
+- Outputウィンドウ側でVideoRendererがまだ作られていない状態で `loop`, `loopStart`, `loopEnd`, `seek`, `play/pause` が届くと反映されなかった
+- sceneIdごとに最新control commandをキャッシュし、レンダラ生成時と動画src更新後に再適用するよう修正
+
 ---
 
 ## 現在のディレクトリ構造

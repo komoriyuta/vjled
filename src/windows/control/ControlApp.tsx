@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useVJStore } from "../../stores/vjStore";
 import { useEngine } from "../../hooks/useEngine";
 import type { Scene, SceneType, BusLabel } from "../../types";
+import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import Editor from "@monaco-editor/react";
 
 const BG = "#111119";
@@ -22,6 +23,13 @@ const typeColors: Record<SceneType, string> = {
   video: "#f39c12",
 };
 
+function formatTime(s: number): string {
+  if (!isFinite(s) || s < 0) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
 export default function ControlApp() {
   const {
     scenes, busA, busB, crossfade, isPlaying,
@@ -38,7 +46,7 @@ export default function ControlApp() {
   const selectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const [outputDecorated, setOutputDecorated] = useState(false);
 
-  useEngine({
+  const { sendCommand, getVideoInfo } = useEngine({
     outputContainerRef: outputPreviewRef,
     preview: true,
     busAPreviewRef: busACanvasRef,
@@ -49,8 +57,20 @@ export default function ControlApp() {
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
 
   useEffect(() => {
+    const publishState = () => {
+      const state = useVJStore.getState();
+      emitVJState({
+        scenes: state.scenes,
+        busA: state.busA,
+        busB: state.busB,
+        crossfade: state.crossfade,
+        isPlaying: state.isPlaying,
+        selectedSceneId: state.selectedSceneId,
+      });
+    };
+
     const unsub = useVJStore.subscribe((state) => {
-      emit("vj-state", {
+      emitVJState({
         scenes: state.scenes,
         busA: state.busA,
         busB: state.busB,
@@ -59,10 +79,14 @@ export default function ControlApp() {
         selectedSceneId: state.selectedSceneId,
       });
     });
-    emit("vj-state", {
-      scenes, busA, busB, crossfade, isPlaying, selectedSceneId,
-    });
-    return unsub;
+
+    const unlistenRequest = listenVJStateRequest(publishState);
+    publishState();
+
+    return () => {
+      unsub();
+      unlistenRequest.then((fn) => fn());
+    };
   }, []);
 
   const handleCodeChange = useCallback(
@@ -102,9 +126,8 @@ export default function ControlApp() {
         }],
       });
       if (selected) {
-        const path = typeof selected === "string" ? selected : selected;
-        const filePath = path as string;
-        const src = `file://${filePath}`;
+        const filePath = selected as string;
+        const src = convertFileSrc(filePath);
         updateSceneCode(selectedSceneId, src);
       }
     } catch {}
@@ -258,34 +281,15 @@ export default function ControlApp() {
           </div>
         </div>
 
-        {/* Row 4: Code Editor / Video Picker */}
+        {/* Row 4: Code Editor / Video Controls */}
         <div style={{ flex: 1, padding: "0 8px 8px", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: TEXT2, marginBottom: 4, fontWeight: 700, flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>
-              {selectedScene ? `Code: ${selectedScene.name} (${selectedScene.type})` : "Select a scene"}
-            </span>
-            {selectedScene?.type === "video" && (
-              <button
-                onClick={pickVideoFile}
-                style={{
-                  background: typeColors.video,
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 4,
-                  padding: "2px 10px",
-                  fontSize: 10,
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
-              >
-                Choose File
-              </button>
-            )}
+          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 1, color: TEXT2, marginBottom: 4, fontWeight: 700, flexShrink: 0 }}>
+            {selectedScene ? `Code: ${selectedScene.name} (${selectedScene.type})` : "Select a scene"}
           </div>
           <div style={{ flex: 1, borderRadius: 6, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
             {selectedScene ? (
               selectedScene.type === "video" ? (
-                <VideoEditor scene={selectedScene} onPick={pickVideoFile} />
+                <VideoEditor scene={selectedScene} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} />
               ) : (
                 <Editor
                   height="100%"
@@ -317,33 +321,140 @@ export default function ControlApp() {
   );
 }
 
-function VideoEditor({ scene, onPick }: { scene: Scene; onPick: () => void }) {
+function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
+  scene: Scene;
+  onPick: () => void;
+  sendCommand: (id: string, action: string, value: unknown) => void;
+  getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number } | null;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [loop, setLoop] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [loopStart, setLoopStart] = useState(0);
+  const [loopEnd, setLoopEnd] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const info = getVideoInfo(scene.id);
+      if (info) {
+        setPlaying(info.playing);
+        setCurrentTime(info.currentTime);
+        setDuration(info.duration);
+        setLoop(info.loop);
+        setLoopStart(info.loopStart);
+        setLoopEnd(info.loopEnd);
+      }
+    }, 50);
+    return () => clearInterval(interval);
+  }, [scene.id, getVideoInfo]);
+
+  const togglePlay = () => {
+    sendCommand(scene.id, playing ? "pause" : "play", undefined);
+  };
+
+  const toggleLoop = () => {
+    sendCommand(scene.id, "loop", !loop);
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    sendCommand(scene.id, "seek", parseFloat(e.target.value));
+  };
+
+  const setInPoint = () => {
+    sendCommand(scene.id, "loopStart", currentTime);
+  };
+
+  const setOutPoint = () => {
+    sendCommand(scene.id, "loopEnd", currentTime);
+  };
+
+  const resetLoopPoints = () => {
+    sendCommand(scene.id, "loopStart", 0);
+    sendCommand(scene.id, "loopEnd", -1);
+  };
+
+  const seekToLoopStart = () => {
+    sendCommand(scene.id, "seek", loopStart);
+  };
+
+  const hasVideo = !!scene.code;
+
   return (
-    <div style={{ height: "100%", background: "#1e1e1e", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 20 }}>
-      <div style={{ color: typeColors.video, fontSize: 32 }}>&#9654;</div>
-      <div style={{ color: TEXT2, fontSize: 13 }}>Video Scene</div>
-      {scene.code ? (
-        <div style={{ color: TEXT, fontSize: 12, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", padding: "0 12px" }}>
-          {scene.code}
+    <div style={{ height: "100%", background: "#1e1e1e", display: "flex", flexDirection: "column", padding: 16, gap: 10 }}>
+      {/* File section */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ color: typeColors.video, fontSize: 20, flexShrink: 0 }}>&#9654;</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {hasVideo ? (
+            <div style={{ color: TEXT, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {scene.code}
+            </div>
+          ) : (
+            <div style={{ color: TEXT2, fontSize: 12 }}>No video selected</div>
+          )}
         </div>
-      ) : (
-        <div style={{ color: TEXT2, fontSize: 12 }}>No video selected</div>
+        <button onClick={onPick} style={{ background: typeColors.video, color: "#fff", border: "none", borderRadius: 6, padding: "6px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+          {hasVideo ? "Change" : "Choose File"}
+        </button>
+      </div>
+
+      {/* Controls */}
+      {hasVideo && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Transport */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={togglePlay} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 4, padding: "4px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {playing ? "\u275A\u275A" : "\u25B6"}
+            </button>
+            <button onClick={toggleLoop} style={{ background: loop ? ACCENT : PANEL, border: `1px solid ${loop ? ACCENT : BORDER}`, color: loop ? "#fff" : TEXT2, borderRadius: 4, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+              {loop ? "LOOP" : "ONCE"}
+            </button>
+            <span style={{ color: TEXT2, fontSize: 11, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
+              {formatTime(currentTime)} / {formatTime(duration)}
+            </span>
+          </div>
+
+          {/* Seek bar */}
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.01}
+            value={currentTime}
+            onChange={handleSeek}
+            style={{ width: "100%", accentColor: typeColors.video }}
+          />
+
+          {/* AB Loop controls */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: "#4ecdc4", fontSize: 10, fontWeight: 700 }}>A</span>
+            <button onClick={setInPoint} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 3, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+              Set In
+            </button>
+            <span style={{ color: "#4ecdc4", fontSize: 11, fontVariantNumeric: "tabular-nums", minWidth: 42 }}>
+              {formatTime(loopStart)}
+            </span>
+
+            <span style={{ color: TEXT2, fontSize: 10, fontWeight: 700 }}>-</span>
+
+            <span style={{ color: ACCENT2, fontSize: 11, fontVariantNumeric: "tabular-nums", minWidth: 42 }}>
+              {formatTime(loopEnd)}
+            </span>
+            <button onClick={setOutPoint} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 3, padding: "2px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+              Set Out
+            </button>
+            <span style={{ color: ACCENT2, fontSize: 10, fontWeight: 700 }}>B</span>
+
+            <button onClick={seekToLoopStart} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT2, borderRadius: 3, padding: "2px 6px", fontSize: 10, cursor: "pointer", marginLeft: 4 }}>
+              Go A
+            </button>
+            <button onClick={resetLoopPoints} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT2, borderRadius: 3, padding: "2px 6px", fontSize: 10, cursor: "pointer" }}>
+              Reset
+            </button>
+          </div>
+        </div>
       )}
-      <button
-        onClick={onPick}
-        style={{
-          background: typeColors.video,
-          color: "#fff",
-          border: "none",
-          borderRadius: 6,
-          padding: "8px 24px",
-          fontSize: 13,
-          fontWeight: 700,
-          cursor: "pointer",
-        }}
-      >
-        Choose Video File
-      </button>
     </div>
   );
 }
