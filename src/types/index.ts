@@ -18,6 +18,18 @@ export interface VJState {
   selectedSceneId: string | null;
 }
 
+export interface LinkState {
+  enabled: boolean;
+  startStopSync: boolean;
+  bpm: number;
+  beat: number;
+  phase: number;
+  quantum: number;
+  peers: number;
+  playing: boolean;
+  micros: number;
+}
+
 export interface DeviceInfo {
   key: string;
   device_id: number;

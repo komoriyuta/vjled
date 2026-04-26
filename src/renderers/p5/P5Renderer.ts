@@ -1,5 +1,6 @@
 import p5 from "p5";
 import type { Renderer } from "../types";
+import type { LinkState } from "../../types";
 
 const MATH_CONST = `
 var PI = Math.PI;
@@ -102,6 +103,7 @@ export class P5Renderer implements Renderer {
   private canvas: HTMLCanvasElement | null = null;
   private container: HTMLDivElement | null = null;
   private code = "";
+  private linkState: LinkState | null = null;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
@@ -203,6 +205,13 @@ export class P5Renderer implements Renderer {
     lines.push("var keyCode = 0;");
     lines.push("var windowWidth = p.windowWidth;");
     lines.push("var windowHeight = p.windowHeight;");
+    lines.push("var linkBpm = 120;");
+    lines.push("var linkBeat = 0;");
+    lines.push("var linkPhase = 0;");
+    lines.push("var linkQuantum = 4;");
+    lines.push("var linkPeers = 0;");
+    lines.push("var linkEnabled = false;");
+    lines.push("var linkPlaying = true;");
     lines.push(`
 var __syncP5Globals = function() {
   width = p.width;
@@ -218,9 +227,24 @@ var __syncP5Globals = function() {
   keyCode = p.keyCode;
   windowWidth = p.windowWidth;
   windowHeight = p.windowHeight;
+  var link = p.__vjledLink || {};
+  linkBpm = link.bpm || 120;
+  linkBeat = link.beat || 0;
+  linkPhase = link.phase || 0;
+  linkQuantum = link.quantum || 4;
+  linkPeers = link.peers || 0;
+  linkEnabled = !!link.enabled;
+  linkPlaying = link.playing !== false;
 };`);
 
     return lines.join("\n");
+  }
+
+  setLinkState(state: LinkState | null): void {
+    this.linkState = state;
+    if (this.p5Instance) {
+      (this.p5Instance as unknown as { __vjledLink?: LinkState | null }).__vjledLink = state;
+    }
   }
 
   private recreate(): void {
@@ -298,6 +322,7 @@ if (typeof mouseDragged === 'function') {
       };
 
       this.p5Instance = new p5(sketch, this.container);
+      this.setLinkState(this.linkState);
     } catch (e) {
       console.error("p5.js eval error:", e);
     }

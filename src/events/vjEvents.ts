@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { Scene } from "../types";
+import type { LinkState, Scene } from "../types";
 
 export interface VJStatePayload {
   scenes: Scene[];
@@ -81,6 +81,13 @@ export async function listenVJStateRequest(handler: () => void): Promise<Unliste
   const tauriUnlisten = await listenTauri<void>("vj-state-request", handler);
   return () => {
     localUnlisten();
+    tauriUnlisten?.();
+  };
+}
+
+export async function listenLinkState(handler: Handler<LinkState>): Promise<Unlisten> {
+  const tauriUnlisten = await listenTauri<LinkState>("link-state", handler);
+  return () => {
     tauriUnlisten?.();
   };
 }

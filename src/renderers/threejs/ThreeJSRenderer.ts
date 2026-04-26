@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Renderer } from "../types";
+import type { LinkState } from "../../types";
 
 export class ThreeJSRenderer implements Renderer {
   private renderer: THREE.WebGLRenderer | null = null;
@@ -7,9 +8,10 @@ export class ThreeJSRenderer implements Renderer {
   private camera: THREE.PerspectiveCamera | null = null;
   private state: Record<string, unknown> = {};
   private _setup: ((s: THREE.Scene, c: THREE.PerspectiveCamera, r: THREE.WebGLRenderer) => Record<string, unknown>) | null = null;
-  private _update: ((st: Record<string, unknown>, t: number, dt: number) => void) | null = null;
+  private _update: ((st: Record<string, unknown>, t: number, dt: number, link: LinkState | null) => void) | null = null;
   private code = "";
   private initialized = false;
+  private linkState: LinkState | null = null;
 
   init(canvas: HTMLCanvasElement): void {
     this.renderer = new THREE.WebGLRenderer({
@@ -62,7 +64,7 @@ export class ThreeJSRenderer implements Renderer {
       );
       const result = fn(THREE) as {
         setup: ((s: THREE.Scene, c: THREE.PerspectiveCamera, r: THREE.WebGLRenderer) => Record<string, unknown>) | null;
-        update: ((st: Record<string, unknown>, t: number, dt: number) => void) | null;
+        update: ((st: Record<string, unknown>, t: number, dt: number, link: LinkState | null) => void) | null;
       };
       this._setup = result.setup;
       this._update = result.update;
@@ -76,12 +78,18 @@ export class ThreeJSRenderer implements Renderer {
     }
   }
 
+  setLinkState(state: LinkState | null): void {
+    this.linkState = state;
+    this.state.link = state;
+  }
+
   update(time: number, dt: number): void {
     if (!this.renderer || !this.scene || !this.camera) return;
 
     if (this._update) {
       try {
-        this._update(this.state, time, dt);
+        this.state.link = this.linkState;
+        this._update(this.state, time, dt, this.linkState);
       } catch (e) {
         console.error("Three.js update error:", e);
       }
