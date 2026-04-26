@@ -1,9 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
+import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
 import type { Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
@@ -43,12 +44,78 @@ export default function ControlApp() {
     setPlaying, selectScene,
   } = useVJStore();
 
+  const loadProject = useVJStore((s) => s.loadProject);
+  const ledLoadProject = useLedStore((s) => s.loadProject);
+  const ledConfig = useLedStore((s) => s.config);
+  const ledPoints = useLedStore((s) => s.calibrationPoints);
+
+  const handleSave = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Project", extensions: ["vjled.json"] }],
+        defaultPath: "project.vjled.json",
+      });
+      if (!selected) return;
+      const state = useVJStore.getState();
+      const led = useLedStore.getState();
+      const project = {
+        version: 1,
+        vj: {
+          scenes: state.scenes,
+          busA: state.busA,
+          busB: state.busB,
+          crossfade: state.crossfade,
+          isPlaying: state.isPlaying,
+          selectedSceneId: state.selectedSceneId,
+        },
+        led: {
+          config: led.config,
+          calibrationPoints: led.calibrationPoints,
+        },
+      };
+      await invoke("project_save", { path: selected as string, data: project });
+    } catch (e) {
+      console.error("Save failed:", e);
+    }
+  }, []);
+
+  const handleLoad = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Project", extensions: ["vjled.json", "json"] }],
+      });
+      if (!selected) return;
+      const project = await invoke<{ version: number; vj: unknown; led?: { config: unknown; calibrationPoints: unknown } }>("project_load", { path: selected as string });
+      if (project.vj) {
+        loadProject(project.vj as any);
+      }
+      if (project.led) {
+        ledLoadProject(
+          (project.led as any).config ?? useLedStore.getState().config,
+          (project.led as any).calibrationPoints ?? [],
+        );
+      }
+    } catch (e) {
+      console.error("Load failed:", e);
+    }
+  }, [loadProject, ledLoadProject]);
+
   const outputPreviewRef = useRef<HTMLDivElement>(null);
   const busACanvasRef = useRef<HTMLCanvasElement>(null);
   const busBCanvasRef = useRef<HTMLCanvasElement>(null);
   const selectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const [outputDecorated, setOutputDecorated] = useState(false);
   const [showLedPanel, setShowLedPanel] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
+  const [showAiSettings, setShowAiSettings] = useState(false);
+
+  const aiConfig = useAiStore((s) => s.config);
+  const aiGenerating = useAiStore((s) => s.generating);
+  const aiError = useAiStore((s) => s.error);
+  const aiSetConfig = useAiStore((s) => s.setConfig);
+  const aiGenerate = useAiStore((s) => s.generate);
 
   const { sendCommand, getVideoInfo } = useEngine({
     outputContainerRef: outputPreviewRef,
@@ -58,11 +125,30 @@ export default function ControlApp() {
     selectedPreviewRef: selectedCanvasRef,
   });
 
-  const ledConfig = useLedStore((s) => s.config);
-  const ledPoints = useLedStore((s) => s.calibrationPoints);
   const ledFrameRef = useRef(0);
 
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
+
+  const handleAiGenerate = useCallback(async (sceneType: SceneType, prompt: string) => {
+    try {
+      const code = await aiGenerate(sceneType, prompt);
+      addScene(sceneType);
+      const state = useVJStore.getState();
+      const newScene = state.scenes[state.scenes.length - 1];
+      if (newScene) {
+        updateSceneCode(newScene.id, code);
+        selectScene(newScene.id);
+      }
+    } catch {}
+  }, [aiGenerate, addScene, updateSceneCode, selectScene]);
+
+  const handleAiEdit = useCallback(async (prompt: string) => {
+    if (!selectedScene) return;
+    try {
+      const code = await aiGenerate(selectedScene.type, prompt, selectedScene.code);
+      updateSceneCode(selectedScene.id, code);
+    } catch {}
+  }, [aiGenerate, selectedScene, updateSceneCode]);
 
   useEffect(() => {
     if (!ledConfig.enabled || ledPoints.length === 0) return;
@@ -189,8 +275,12 @@ export default function ControlApp() {
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: BG, color: TEXT, fontFamily: "-apple-system, system-ui, sans-serif", fontSize: 13 }}>
       {/* LEFT: Scene Library */}
       <div style={{ width: 200, borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: TEXT2 }}>
-          Scenes
+        <div style={{ padding: "8px 10px 4px", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 1.5, color: TEXT2, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Scenes</span>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={handleSave} style={{ background: "none", border: `1px solid ${BORDER}`, color: TEXT2, fontSize: 9, borderRadius: 3, padding: "1px 6px", cursor: "pointer" }}>Save</button>
+            <button onClick={handleLoad} style={{ background: "none", border: `1px solid ${BORDER}`, color: TEXT2, fontSize: 9, borderRadius: 3, padding: "1px 6px", cursor: "pointer" }}>Load</button>
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "0 6px" }}>
           {scenes.map((s) => {
@@ -249,6 +339,37 @@ export default function ControlApp() {
               +{type === "threejs" ? "Three" : type.toUpperCase()}
             </button>
           ))}
+        </div>
+        <div style={{ borderTop: `1px solid ${BORDER}`, padding: 6, flexShrink: 0 }}>
+          <button
+            onClick={() => setShowAiPanel(!showAiPanel)}
+            style={{
+              width: "100%",
+              padding: "4px 8px",
+              background: showAiPanel ? ACCENT : PANEL,
+              border: `1px solid ${showAiPanel ? ACCENT : BORDER}`,
+              color: showAiPanel ? "#fff" : TEXT2,
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: 10,
+              fontWeight: 700,
+              marginBottom: showAiPanel ? 6 : 0,
+            }}
+          >
+            AI Generate
+          </button>
+          {showAiPanel && (
+            <AiPromptArea
+              generating={aiGenerating}
+              error={aiError}
+              onGenerate={handleAiGenerate}
+              onEdit={selectedScene ? handleAiEdit : undefined}
+              onSettings={() => setShowAiSettings(!showAiSettings)}
+              showSettings={showAiSettings}
+              config={aiConfig}
+              onConfigChange={aiSetConfig}
+            />
+          )}
         </div>
       </div>
 
@@ -582,5 +703,146 @@ function VJButton({ onClick, children, accent }: { onClick: () => void; children
     >
       {children}
     </button>
+  );
+}
+
+function AiPromptArea({ generating, error, onGenerate, onEdit, onSettings, showSettings, config, onConfigChange }: {
+  generating: boolean;
+  error: string | null;
+  onGenerate: (type: SceneType, prompt: string) => void;
+  onEdit?: (prompt: string) => void;
+  onSettings: () => void;
+  showSettings: boolean;
+  config: { baseUrl: string; apiKey: string; model: string };
+  onConfigChange: (c: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [selectedType, setSelectedType] = useState<SceneType>("glsl");
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    background: "#0d0d15",
+    border: `1px solid ${BORDER}`,
+    borderRadius: 3,
+    color: TEXT,
+    padding: "4px 6px",
+    fontSize: 11,
+    boxSizing: "border-box",
+  };
+
+  const labelStyle: React.CSSProperties = {
+    fontSize: 9,
+    fontWeight: 700,
+    color: TEXT2,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+        {(["glsl", "p5", "threejs"] as SceneType[]).map((t) => (
+          <button
+            key={t}
+            onClick={() => setSelectedType(t)}
+            style={{
+              padding: "2px 6px",
+              background: selectedType === t ? typeColors[t] : "transparent",
+              color: selectedType === t ? "#fff" : TEXT2,
+              border: `1px solid ${selectedType === t ? typeColors[t] : BORDER}`,
+              borderRadius: 3,
+              cursor: "pointer",
+              fontSize: 9,
+              fontWeight: 700,
+            }}
+          >
+            {t === "threejs" ? "Three" : t.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Describe the visual effect..."
+        rows={2}
+        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && prompt.trim() && !generating) {
+            e.preventDefault();
+            onGenerate(selectedType, prompt.trim());
+          }
+        }}
+      />
+
+      <div style={{ display: "flex", gap: 4 }}>
+        <button
+          disabled={generating || !prompt.trim() || !config.apiKey}
+          onClick={() => onGenerate(selectedType, prompt.trim())}
+          style={{
+            flex: 1,
+            padding: "3px 8px",
+            background: generating ? TEXT2 : ACCENT,
+            color: "#fff",
+            border: "none",
+            borderRadius: 3,
+            cursor: generating || !prompt.trim() || !config.apiKey ? "not-allowed" : "pointer",
+            fontSize: 10,
+            fontWeight: 700,
+            opacity: generating || !config.apiKey ? 0.5 : 1,
+          }}
+        >
+          {generating ? "Generating..." : "Generate New"}
+        </button>
+        {onEdit && (
+          <button
+            disabled={generating || !prompt.trim() || !config.apiKey}
+            onClick={() => onEdit(prompt.trim())}
+            style={{
+              flex: 1,
+              padding: "3px 8px",
+              background: PANEL,
+              color: generating || !config.apiKey ? TEXT2 : TEXT,
+              border: `1px solid ${BORDER}`,
+              borderRadius: 3,
+              cursor: generating || !prompt.trim() || !config.apiKey ? "not-allowed" : "pointer",
+              fontSize: 10,
+              fontWeight: 700,
+              opacity: generating || !config.apiKey ? 0.5 : 1,
+            }}
+          >
+            {generating ? "..." : "Edit Current"}
+          </button>
+        )}
+      </div>
+
+      <button onClick={onSettings} style={{ background: "none", border: "none", color: TEXT2, fontSize: 9, cursor: "pointer", textAlign: "left", padding: 0 }}>
+        {showSettings ? "Hide Settings" : "API Settings"}
+      </button>
+
+      {showSettings && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, background: "#0d0d15", borderRadius: 4, padding: 6 }}>
+          <div>
+            <div style={labelStyle}>Base URL</div>
+            <input style={inputStyle} value={config.baseUrl} onChange={(e) => onConfigChange({ baseUrl: e.target.value })} placeholder="https://api.openai.com/v1" />
+          </div>
+          <div>
+            <div style={labelStyle}>API Key</div>
+            <input type="password" style={inputStyle} value={config.apiKey} onChange={(e) => onConfigChange({ apiKey: e.target.value })} placeholder="sk-..." />
+          </div>
+          <div>
+            <div style={labelStyle}>Model</div>
+            <input style={inputStyle} value={config.model} onChange={(e) => onConfigChange({ model: e.target.value })} placeholder="gpt-4o" />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ background: "#3a1515", borderRadius: 3, padding: 4, fontSize: 9, color: "#ff6b6b", maxHeight: 40, overflow: "auto" }}>
+          {error}
+        </div>
+      )}
+    </div>
   );
 }

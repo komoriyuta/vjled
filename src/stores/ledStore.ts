@@ -19,6 +19,7 @@ interface LedStore {
   setConnected: (v: boolean) => void;
   setCameraStream: (stream: MediaStream | null) => void;
   resetCalibration: () => void;
+  loadProject: (config: LedConfig, points: CalibrationPoint[]) => void;
 }
 
 export const useLedStore = create<LedStore>((set) => ({
@@ -51,4 +52,6 @@ export const useLedStore = create<LedStore>((set) => ({
   setCameraStream: (stream) => set({ cameraStream: stream }),
   resetCalibration: () =>
     set({ calibrationPoints: [], calibrationProgress: 0 }),
+  loadProject: (config, points) =>
+    set({ config, calibrationPoints: points, connected: false }),
 }));

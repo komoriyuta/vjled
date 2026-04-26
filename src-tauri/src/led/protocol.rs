@@ -10,28 +10,17 @@ const MAX_PIXELS_PER_PACKET: usize = 255;
 
 pub struct NeoPixelProtocol {
     socket: UdpSocket,
-    broadcast_addr: SocketAddrV4,
     frame_no: u32,
 }
 
 impl NeoPixelProtocol {
-    pub fn new(broadcast_ip: &str, port: u16) -> Result<Self, String> {
-        let ip: Ipv4Addr = broadcast_ip
-            .parse()
-            .map_err(|e| format!("Invalid broadcast IP: {}", e))?;
-        let addr = SocketAddrV4::new(ip, port);
-
+    pub fn new() -> Result<Self, String> {
         let socket = UdpSocket::bind("0.0.0.0:0")
             .map_err(|e| format!("Failed to bind UDP socket: {}", e))?;
         socket
             .set_broadcast(true)
             .map_err(|e| format!("Failed to set broadcast: {}", e))?;
-
-        Ok(Self {
-            socket,
-            broadcast_addr: addr,
-            frame_no: 0,
-        })
+        Ok(Self { socket, frame_no: 0 })
     }
 
     fn next_frame_no(&mut self) -> u32 {
@@ -49,19 +38,27 @@ impl NeoPixelProtocol {
         buf
     }
 
-    fn send(&self, data: &[u8]) -> Result<(), String> {
+    fn send_to(&self, data: &[u8], target: &SocketAddrV4) -> Result<(), String> {
         self.socket
-            .send_to(data, self.broadcast_addr)
+            .send_to(data, target)
             .map_err(|e| format!("UDP send failed: {}", e))?;
         Ok(())
     }
 
-    pub fn send_set_pixel_range(
+    fn resolve_addr(ip: &str, port: u16) -> Result<SocketAddrV4, String> {
+        let addr: Ipv4Addr = ip.parse().map_err(|e| format!("Invalid IP '{}': {}", ip, e))?;
+        Ok(SocketAddrV4::new(addr, port))
+    }
+
+    pub fn send_set_pixel_range_to(
         &mut self,
         device_id: u16,
         start: u16,
         pixels: &[(u8, u8, u8)],
+        target_ip: &str,
+        port: u16,
     ) -> Result<(), String> {
+        let addr = Self::resolve_addr(target_ip, port)?;
         for chunk in pixels.chunks(MAX_PIXELS_PER_PACKET) {
             let count = chunk.len() as u8;
             let frame_no = self.next_frame_no();
@@ -76,12 +73,21 @@ impl NeoPixelProtocol {
                 buf.push(*g);
                 buf.push(*b);
             }
-            self.send(&buf)?;
+            self.send_to(&buf, &addr)?;
         }
         Ok(())
     }
 
-    pub fn send_fill_color(&mut self, device_id: u16, r: u8, g: u8, b: u8) -> Result<(), String> {
+    pub fn send_fill_color_to(
+        &mut self,
+        device_id: u16,
+        r: u8,
+        g: u8,
+        b: u8,
+        target_ip: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        let addr = Self::resolve_addr(target_ip, port)?;
         let frame_no = self.next_frame_no();
         let header = self.build_header(device_id, CMD_FILL_COLOR, 0, frame_no);
 
@@ -90,18 +96,30 @@ impl NeoPixelProtocol {
         buf.push(r);
         buf.push(g);
         buf.push(b);
-        self.send(&buf)
+        self.send_to(&buf, &addr)
     }
 
-    pub fn send_show(&mut self, device_id: u16) -> Result<(), String> {
+    pub fn send_show_to(
+        &mut self,
+        device_id: u16,
+        target_ip: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        let addr = Self::resolve_addr(target_ip, port)?;
         let frame_no = self.next_frame_no();
         let header = self.build_header(device_id, CMD_SHOW, 0, frame_no);
-        self.send(&header)
+        self.send_to(&header, &addr)
     }
 
-    pub fn send_ping(&mut self, device_id: u16) -> Result<(), String> {
+    pub fn send_ping_to(
+        &mut self,
+        device_id: u16,
+        target_ip: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        let addr = Self::resolve_addr(target_ip, port)?;
         let frame_no = self.next_frame_no();
         let header = self.build_header(device_id, CMD_PING, 0, frame_no);
-        self.send(&header)
+        self.send_to(&header, &addr)
     }
 }

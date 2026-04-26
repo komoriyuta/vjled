@@ -11,7 +11,7 @@ pub struct MultiDeviceLEDController {
 impl MultiDeviceLEDController {
     pub fn from_layout(layout: &HardwareLayout) -> Result<Self, String> {
         let resolved = layout.resolve();
-        let protocol = NeoPixelProtocol::new(&resolved.broadcast_ip, resolved.port)?;
+        let protocol = NeoPixelProtocol::new()?;
         Ok(Self {
             protocol: Mutex::new(protocol),
             layout: resolved,
@@ -19,19 +19,20 @@ impl MultiDeviceLEDController {
     }
 
     pub fn simple(
-        broadcast_ip: &str,
+        target_ip: &str,
         port: u16,
         device_id: u16,
         pixel_count: usize,
     ) -> Result<Self, String> {
         let layout_json = serde_json::json!({
             "udp": {
-                "broadcast_ip": broadcast_ip,
+                "broadcast_ip": target_ip,
                 "port": port,
             },
             "devices": [{
                 "key": "default",
                 "device_id": device_id,
+                "controller_ip": target_ip,
                 "strips": [{"pin": 16, "pixel_count": pixel_count}]
             }]
         });
@@ -40,10 +41,12 @@ impl MultiDeviceLEDController {
         Self::from_layout(&layout)
     }
 
+    #[allow(dead_code)]
     pub fn total_pixels(&self) -> usize {
         self.layout.total_pixels
     }
 
+    #[allow(dead_code)]
     pub fn device_count(&self) -> usize {
         self.layout.devices.len()
     }
@@ -53,6 +56,7 @@ impl MultiDeviceLEDController {
             .protocol
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
 
         for device in &self.layout.devices {
             let mut pixels: Vec<(u8, u8, u8)> = Vec::new();
@@ -68,10 +72,12 @@ impl MultiDeviceLEDController {
                     pixels.push((*r, *g, *b));
                 } else if start_local.is_some() {
                     if !pixels.is_empty() {
-                        proto.send_set_pixel_range(
+                        proto.send_set_pixel_range_to(
                             device.device_id,
                             start_local.unwrap() as u16,
                             &pixels,
+                            &device.controller_ip,
+                            port,
                         )?;
                     }
                     start_local = None;
@@ -80,14 +86,16 @@ impl MultiDeviceLEDController {
             }
 
             if !pixels.is_empty() {
-                proto.send_set_pixel_range(
+                proto.send_set_pixel_range_to(
                     device.device_id,
                     start_local.unwrap() as u16,
                     &pixels,
+                    &device.controller_ip,
+                    port,
                 )?;
             }
 
-            proto.send_show(device.device_id)?;
+            proto.send_show_to(device.device_id, &device.controller_ip, port)?;
         }
 
         Ok(())
@@ -98,9 +106,11 @@ impl MultiDeviceLEDController {
             .protocol
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
+
         for device in &self.layout.devices {
-            proto.send_fill_color(device.device_id, r, g, b)?;
-            proto.send_show(device.device_id)?;
+            proto.send_fill_color_to(device.device_id, r, g, b, &device.controller_ip, port)?;
+            proto.send_show_to(device.device_id, &device.controller_ip, port)?;
         }
         Ok(())
     }
@@ -120,8 +130,10 @@ impl MultiDeviceLEDController {
             .protocol
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
+
         for device in &self.layout.devices {
-            proto.send_ping(device.device_id)?;
+            proto.send_ping_to(device.device_id, &device.controller_ip, port)?;
         }
         Ok(())
     }
