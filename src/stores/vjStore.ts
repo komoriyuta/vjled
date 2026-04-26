@@ -16,6 +16,7 @@ interface VJStore extends VJState {
   fadeToB: () => void;
   setPlaying: (p: boolean) => void;
   selectScene: (id: string | null) => void;
+  loadProject: (data: VJState) => void;
 }
 
 let _nextId = 1;
@@ -102,4 +103,19 @@ export const useVJStore = create<VJStore>((set, get) => ({
 
   setPlaying: (p) => set({ isPlaying: p }),
   selectScene: (id) => set({ selectedSceneId: id }),
+  loadProject: (data) => {
+    const maxNum = data.scenes.reduce((max, s) => {
+      const m = s.id.match(/scene-(\d+)/);
+      return m ? Math.max(max, parseInt(m[1])) : max;
+    }, 0);
+    _nextId = maxNum + 1;
+    set({
+      scenes: data.scenes,
+      busA: data.busA,
+      busB: data.busB,
+      crossfade: data.crossfade,
+      isPlaying: data.isPlaying,
+      selectedSceneId: data.selectedSceneId,
+    });
+  },
 }));

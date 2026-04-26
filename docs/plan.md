@@ -34,10 +34,15 @@ npm run tauri build
 
 ### 2ウィンドウ構成
 - **Control ウィンドウ** (`/`, 1024x720): VJ操作パネル
-  - 左: シーンライブラリ (タイプ別色分け、A/Bバスアサイン)
-  - 中央上: バスA/Bプレビュー + 出力プレビュー
+  - 左: シーンライブラリ専用 (タイプ別色分け、A/Bバスアサイン、シーン追加/削除)
+  - 中央上: Program Outputを主プレビューとして配置し、Bus A/B/Selectedの小プレビューを監視用に分離
   - 中央下: クロスフェーダー (CUT A/B, FADE A/B, PLAY/PAUSE)
-  - 中央下: Monacoコードエディタ (GLSL→cpp, JS→javascript シンタックスハイライト)
+  - 中央下: Monacoコードエディタ / Video専用コントロール
+  - 右: Project / Output / AI / LED のタブ付き操作バー
+    - Project: Save/Load とプロジェクト状態
+    - Output: 出力ウィンドウ設定、LED Mapping起動、Python仕様との差分メモ
+    - AI: 生成/編集プロンプトとAPI設定
+    - LED: 単一カメラLEDマッピング、UDP出力、キャリブレーション
 - **Output ウィンドウ** (`/output.html`, 1280x720, フレームレス): フルスクリーン映像出力
 
 ### ウィンドウ間通信
@@ -226,7 +231,7 @@ Bus B Scene → RendererB → offscreen canvas B ─┘
 ### 2026-04-24: UI機能追加
 
 **追加1: 出力ウィンドウ タイトルバーON/OFF** (`windows/control/ControlApp.tsx`)
-- Outputプレビューカードに "Show Bar" / "Hide Bar" トグルボタン追加
+- 右側 Output タブに "Show Bar" / "Hide Bar" トグルボタン追加
 - `WebviewWindow.getByLabel("output")` → `setDecorations(bool)` / `isDecorated()` で操作
 - タイトルバー非表示時はframeless（ドラッグ不可）、表示時は移動・リサイズ可能
 
