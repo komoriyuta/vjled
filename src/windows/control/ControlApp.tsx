@@ -3,10 +3,13 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useVJStore } from "../../stores/vjStore";
+import { useLedStore } from "../../stores/ledStore";
 import { useEngine } from "../../hooks/useEngine";
 import type { Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
+import { sendLedFrame } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
+import LedPanel from "../../components/LedPanel";
 
 const BG = "#111119";
 const PANEL = "#1a1a28";
@@ -45,6 +48,7 @@ export default function ControlApp() {
   const busBCanvasRef = useRef<HTMLCanvasElement>(null);
   const selectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const [outputDecorated, setOutputDecorated] = useState(false);
+  const [showLedPanel, setShowLedPanel] = useState(false);
 
   const { sendCommand, getVideoInfo } = useEngine({
     outputContainerRef: outputPreviewRef,
@@ -54,7 +58,42 @@ export default function ControlApp() {
     selectedPreviewRef: selectedCanvasRef,
   });
 
+  const ledConfig = useLedStore((s) => s.config);
+  const ledPoints = useLedStore((s) => s.calibrationPoints);
+  const ledFrameRef = useRef(0);
+
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
+
+  useEffect(() => {
+    if (!ledConfig.enabled || ledPoints.length === 0) return;
+    let running = true;
+    let lastSend = 0;
+    const LED_FPS = 30;
+    const interval = 1000 / LED_FPS;
+
+    const loop = () => {
+      if (!running) return;
+      const now = performance.now();
+      if (now - lastSend >= interval) {
+        lastSend = now;
+        const container = outputPreviewRef.current;
+        const canvas = container?.querySelector("canvas") as HTMLCanvasElement | null;
+        if (canvas) {
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
+          }
+        }
+      }
+      ledFrameRef.current = requestAnimationFrame(loop);
+    };
+    ledFrameRef.current = requestAnimationFrame(loop);
+
+    return () => {
+      running = false;
+      cancelAnimationFrame(ledFrameRef.current);
+    };
+  }, [ledConfig.enabled, ledPoints, ledConfig]);
 
   useEffect(() => {
     const publishState = () => {
@@ -232,21 +271,38 @@ export default function ControlApp() {
             <canvas ref={selectedCanvasRef} width={480} height={270} style={canvasStyle} />
           </PreviewCard>
           <PreviewCard label="Output" scene={undefined} color={TEXT} extra={
-            <button
-              onClick={toggleOutputDecorations}
-              style={{
-                background: "none",
-                border: `1px solid ${BORDER}`,
-                color: TEXT2,
-                fontSize: 9,
-                borderRadius: 3,
-                padding: "1px 6px",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {outputDecorated ? "Hide Bar" : "Show Bar"}
-            </button>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                onClick={() => setShowLedPanel(!showLedPanel)}
+                style={{
+                  background: showLedPanel ? ACCENT : "none",
+                  border: `1px solid ${showLedPanel ? ACCENT : BORDER}`,
+                  color: showLedPanel ? "#fff" : TEXT2,
+                  fontSize: 9,
+                  borderRadius: 3,
+                  padding: "1px 6px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                LED
+              </button>
+              <button
+                onClick={toggleOutputDecorations}
+                style={{
+                  background: "none",
+                  border: `1px solid ${BORDER}`,
+                  color: TEXT2,
+                  fontSize: 9,
+                  borderRadius: 3,
+                  padding: "1px 6px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {outputDecorated ? "Hide Bar" : "Show Bar"}
+              </button>
+            </div>
           }>
             <div
               ref={outputPreviewRef}
@@ -317,6 +373,13 @@ export default function ControlApp() {
           </div>
         </div>
       </div>
+
+      {/* RIGHT: LED Panel */}
+      {showLedPanel && (
+        <div style={{ width: 240, borderLeft: `1px solid ${BORDER}`, flexShrink: 0 }}>
+          <LedPanel />
+        </div>
+      )}
     </div>
   );
 }
