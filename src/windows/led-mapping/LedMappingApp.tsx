@@ -10,6 +10,7 @@ import {
   calibrationDetectLed,
   calibrationReset,
 } from "../../led/commands";
+import { attachCameraStream, listCalibrationCameras, prepareCameraWindow, startCalibrationCamera, type CameraDevice } from "../../led/camera";
 import { rgbaFromCanvas } from "../../led/pixelExtractor";
 import type { CalibrationPoint } from "../../types";
 
@@ -22,6 +23,7 @@ const BORDER = "#2a2a3a";
 const HANDLE_R = 8;
 
 type Vec2 = [number, number];
+type SideTab = "setup" | "map" | "calibrate" | "test";
 
 function computeHomography(src: Vec2[], dst: Vec2[]): number[] | null {
   const [sx0, sy0] = src[0], [sx1, sy1] = src[1], [sx2, sy2] = src[2], [sx3, sy3] = src[3];
@@ -108,27 +110,85 @@ export default function LedMappingApp() {
   const [dragging, setDragging] = useState<number | null>(null);
   const [rawCamPoints, setRawCamPoints] = useState<CalibrationPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [sideTab, setSideTab] = useState<SideTab>("setup");
+  const [cameras, setCameras] = useState<CameraDevice[]>([]);
+  const [cameraStatus, setCameraStatus] = useState("Camera stopped");
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    prepareCameraWindow();
+  }, []);
+
+  useEffect(() => {
     if (videoRef.current && cameraStream) {
-      videoRef.current.srcObject = cameraStream;
+      attachCameraStream(videoRef.current, cameraStream)
+        .then((status) => setCameraStatus(status))
+        .catch((e) => setError(`Video playback: ${String(e)}`));
     }
+  }, [cameraStream]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !cameraStream) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let frame = 0;
+    const draw = () => {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if (width > 0 && height > 0) {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        ctx.drawImage(video, 0, 0, width, height);
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+
+    return () => cancelAnimationFrame(frame);
   }, [cameraStream]);
 
   const startCamera = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+      setError(null);
+      const stream = await startCalibrationCamera(config.cameraDeviceId);
       setCameraStream(stream);
+      const track = stream.getVideoTracks()[0];
+      setCameraStatus(track?.label || "Camera stream opened");
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
     } catch (e) {
       setError(`Camera: ${String(e)}`);
     }
-  }, [setCameraStream]);
+  }, [config.cameraDeviceId, setCameraStream]);
+
+  const refreshCameras = useCallback(async () => {
+    try {
+      setError(null);
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
+      if (!config.cameraDeviceId && devices[0]) {
+        setConfig({ cameraDeviceId: devices[0].deviceId });
+      }
+    } catch (e) {
+      setError(`Camera list: ${String(e)}`);
+    }
+  }, [config.cameraDeviceId, setConfig]);
+
+  useEffect(() => {
+    if (sideTab === "setup") refreshCameras();
+  }, [sideTab, refreshCameras]);
 
   const stopCamera = useCallback(() => {
     if (cameraStream) {
       cameraStream.getTracks().forEach((t) => t.stop());
       setCameraStream(null);
+      setCameraStatus("Camera stopped");
     }
   }, [cameraStream, setCameraStream]);
 
@@ -155,11 +215,13 @@ export default function LedMappingApp() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return null;
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
     return rgbaFromCanvas(canvas);
   }, []);
 
@@ -330,7 +392,8 @@ export default function LedMappingApp() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }} ref={containerRef}>
         {cameraStream ? (
           <>
-            <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }} />
+            <video ref={videoRef} autoPlay playsInline muted style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
+            <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000", display: "block" }} />
             <canvas ref={overlayRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", cursor: dragging !== null ? "grabbing" : "default" }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} />
           </>
         ) : (
@@ -338,103 +401,143 @@ export default function LedMappingApp() {
             Start camera to begin mapping
           </div>
         )}
-        <canvas ref={canvasRef} style={{ display: "none" }} />
       </div>
 
-      <div style={{ width: 220, borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", flexShrink: 0, overflowY: "auto", padding: 8, gap: 8 }}>
+      <div style={{ width: 260, borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden" }}>
         <div style={{ fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: ACCENT }}>
-          LED Mapping
+          <div style={{ padding: 8, borderBottom: `1px solid ${BORDER}` }}>LED Calibration</div>
         </div>
-
-        <div>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={cameraStream ? stopCamera : startCamera} style={{ background: cameraStream ? "#e74c3c" : ACCENT, color: "#fff", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", flex: 1 }}>
-              {cameraStream ? "Stop Camera" : "Start Camera"}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: 8, borderBottom: `1px solid ${BORDER}` }}>
+          {(["setup", "map", "calibrate", "test"] as SideTab[]).map((tab) => (
+            <button key={tab} onClick={() => setSideTab(tab)} style={{ background: sideTab === tab ? ACCENT : PANEL, border: `1px solid ${sideTab === tab ? ACCENT : BORDER}`, color: sideTab === tab ? "#fff" : TEXT2, borderRadius: 4, padding: "5px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer", textTransform: "capitalize" }}>
+              {tab}
             </button>
-          </div>
-        </div>
-
-        <div>
-          <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Target IP</div>
-          <input style={inputStyle} value={config.broadcastIp} onChange={(e) => setConfig({ broadcastIp: e.target.value })} />
-        </div>
-
-        <div style={{ display: "flex", gap: 6 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Port</div>
-            <input style={inputStyle} type="number" value={config.port} onChange={(e) => setConfig({ port: parseInt(e.target.value) || 7777 })} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Pixels</div>
-            <input style={inputStyle} type="number" value={config.pixelCount} onChange={(e) => setConfig({ pixelCount: parseInt(e.target.value) || 25 })} />
-          </div>
-        </div>
-
-        <button onClick={handleConnect} style={{ background: connected ? "#2ecc71" : ACCENT, color: "#fff", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%" }}>
-          {connected ? "Reconnect" : "Connect"}
-        </button>
-
-        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 4 }}>Handles</div>
-          <div style={{ fontSize: 10, color: TEXT2, marginBottom: 4 }}>
-            Drag the 4 numbered corners on the camera view to outline where the video maps to.
-          </div>
-          {handles.map((h, i) => (
-            <div key={i} style={{ fontSize: 10, color: TEXT2 }}>
-              {i + 1}: ({h[0].toFixed(2)}, {h[1].toFixed(2)})
-            </div>
           ))}
         </div>
 
-        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 4 }}>Calibration</div>
-          <button
-            onClick={runCalibration}
-            disabled={!connected || !cameraStream}
-            style={{
-              width: "100%",
-              background: ACCENT,
-              color: "#fff",
-              border: "none",
-              borderRadius: 4,
-              padding: "6px 12px",
-              fontSize: 11,
-              fontWeight: 700,
-              cursor: !connected || !cameraStream ? "not-allowed" : "pointer",
-              opacity: !connected || !cameraStream ? 0.5 : 1,
-            }}
-          >
-            Auto Calibrate
-          </button>
-        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+          {sideTab === "setup" && (
+            <>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Camera</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={cameraStream ? stopCamera : startCamera} style={{ background: cameraStream ? "#e74c3c" : ACCENT, color: "#fff", border: "none", borderRadius: 4, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", flex: 1 }}>
+                    {cameraStream ? "Stop Camera" : "Start Camera"}
+                  </button>
+                  <button onClick={refreshCameras} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 4, padding: "6px 10px", fontSize: 10, cursor: "pointer" }}>
+                    Scan
+                  </button>
+                </div>
+                <select
+                  value={config.cameraDeviceId ?? ""}
+                  onChange={(e) => setConfig({ cameraDeviceId: e.target.value || null })}
+                  style={{ ...inputStyle, marginTop: 6 }}
+                >
+                  <option value="">Default camera</option>
+                  {cameras.map((camera) => (
+                    <option key={camera.deviceId} value={camera.deviceId}>{camera.label}</option>
+                  ))}
+                </select>
+                <div style={{ marginTop: 4, fontSize: 10, color: TEXT2, lineHeight: 1.4 }}>{cameraStatus}</div>
+              </div>
 
-        <div style={{ background: "#0d0d15", borderRadius: 4, padding: 6, fontSize: 10 }}>
-          <div>Camera raw: {rawCamPoints.length} points</div>
-          <div>Mapped (video): {calibrationPoints.length} points</div>
-          <div>LED enabled: {config.enabled ? "Yes" : "No"}</div>
-          <button onClick={() => setConfig({ enabled: !config.enabled })} style={{ marginTop: 4, background: config.enabled ? "#2ecc71" : PANEL, border: `1px solid ${config.enabled ? "#2ecc71" : BORDER}`, color: config.enabled ? "#fff" : TEXT2, borderRadius: 3, padding: "2px 8px", fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
-            {config.enabled ? "LED ON" : "LED OFF"}
-          </button>
-        </div>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Target IP</div>
+                <input style={inputStyle} value={config.broadcastIp} onChange={(e) => setConfig({ broadcastIp: e.target.value })} />
+              </div>
 
-        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 4 }}>Brightness</div>
-          <input type="range" min={0.05} max={1} step={0.01} value={config.brightness} onChange={(e) => setConfig({ brightness: parseFloat(e.target.value) })} style={{ width: "100%" }} />
-          <span style={{ fontSize: 10, color: TEXT2 }}>{(config.brightness * 100).toFixed(0)}%</span>
-        </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Port</div>
+                  <input style={inputStyle} type="number" value={config.port} onChange={(e) => setConfig({ port: parseInt(e.target.value) || 7777 })} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 3 }}>Pixels</div>
+                  <input style={inputStyle} type="number" value={config.pixelCount} onChange={(e) => setConfig({ pixelCount: parseInt(e.target.value) || 25 })} />
+                </div>
+              </div>
 
-        <div style={{ borderTop: `1px solid ${BORDER}`, paddingTop: 8 }}>
-          <button onClick={async () => { try { await ledFill(255, 0, 0); } catch {} }} style={{ background: "#e74c3c", border: "none", borderRadius: 3, padding: "3px 8px", fontSize: 9, cursor: "pointer", color: "#fff", marginRight: 3 }}>Red</button>
-          <button onClick={async () => { try { await ledFill(0, 255, 0); } catch {} }} style={{ background: "#2ecc71", border: "none", borderRadius: 3, padding: "3px 8px", fontSize: 9, cursor: "pointer", color: "#fff", marginRight: 3 }}>Green</button>
-          <button onClick={async () => { try { await ledFill(0, 0, 255); } catch {} }} style={{ background: "#3498db", border: "none", borderRadius: 3, padding: "3px 8px", fontSize: 9, cursor: "pointer", color: "#fff", marginRight: 3 }}>Blue</button>
-          <button onClick={async () => { try { await ledAllOff(); } catch {} }} style={{ background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 3, padding: "3px 8px", fontSize: 9, cursor: "pointer", color: TEXT2 }}>Off</button>
-        </div>
+              <button onClick={handleConnect} style={{ background: connected ? "#2ecc71" : ACCENT, color: "#fff", border: "none", borderRadius: 4, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", width: "100%" }}>
+                {connected ? "Reconnect LED" : "Connect LED"}
+              </button>
+            </>
+          )}
 
-        {error && (
-          <div style={{ background: "#3a1515", borderRadius: 4, padding: 4, fontSize: 10, color: "#ff6b6b" }}>
-            {error}
-          </div>
-        )}
+          {sideTab === "map" && (
+            <>
+              <div style={{ fontSize: 10, color: TEXT2, lineHeight: 1.4 }}>
+                Drag the 4 numbered corners on the camera view to outline the physical area used by the VJ output.
+              </div>
+              {handles.map((h, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "20px 1fr 1fr", gap: 4, alignItems: "center", fontSize: 10, color: TEXT2 }}>
+                  <span>{i + 1}</span>
+                  <input style={inputStyle} type="number" min={0} max={1} step={0.01} value={h[0].toFixed(2)} onChange={(e) => {
+                    const x = Math.max(0, Math.min(1, parseFloat(e.target.value) || 0));
+                    setHandles((prev) => prev.map((p, idx) => idx === i ? [x, p[1]] : p));
+                  }} />
+                  <input style={inputStyle} type="number" min={0} max={1} step={0.01} value={h[1].toFixed(2)} onChange={(e) => {
+                    const y = Math.max(0, Math.min(1, parseFloat(e.target.value) || 0));
+                    setHandles((prev) => prev.map((p, idx) => idx === i ? [p[0], y] : p));
+                  }} />
+                </div>
+              ))}
+            </>
+          )}
+
+          {sideTab === "calibrate" && (
+            <>
+              <button
+                onClick={runCalibration}
+                disabled={!connected || !cameraStream}
+                style={{
+                  width: "100%",
+                  background: ACCENT,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "7px 12px",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: !connected || !cameraStream ? "not-allowed" : "pointer",
+                  opacity: !connected || !cameraStream ? 0.5 : 1,
+                }}
+              >
+                Auto Calibrate
+              </button>
+              <div style={{ background: "#0d0d15", borderRadius: 4, padding: 6, fontSize: 10 }}>
+                <div>Camera raw: {rawCamPoints.length} points</div>
+                <div>Mapped output: {calibrationPoints.length} points</div>
+                <div>LED output: {config.enabled ? "Enabled" : "Disabled"}</div>
+              </div>
+              <button onClick={() => setConfig({ enabled: !config.enabled })} style={{ background: config.enabled ? "#2ecc71" : PANEL, border: `1px solid ${config.enabled ? "#2ecc71" : BORDER}`, color: config.enabled ? "#fff" : TEXT2, borderRadius: 4, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                {config.enabled ? "Disable LED Output" : "Enable LED Output"}
+              </button>
+            </>
+          )}
+
+          {sideTab === "test" && (
+            <>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 4 }}>Brightness</div>
+                <input type="range" min={0.05} max={1} step={0.01} value={config.brightness} onChange={(e) => setConfig({ brightness: parseFloat(e.target.value) })} style={{ width: "100%" }} />
+                <span style={{ fontSize: 10, color: TEXT2 }}>{(config.brightness * 100).toFixed(0)}%</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <button onClick={async () => { try { await ledFill(255, 0, 0); } catch (e) { setError(String(e)); } }} style={{ background: "#e74c3c", border: "none", borderRadius: 4, padding: "6px 8px", fontSize: 10, cursor: "pointer", color: "#fff" }}>Red</button>
+                <button onClick={async () => { try { await ledFill(0, 255, 0); } catch (e) { setError(String(e)); } }} style={{ background: "#2ecc71", border: "none", borderRadius: 4, padding: "6px 8px", fontSize: 10, cursor: "pointer", color: "#fff" }}>Green</button>
+                <button onClick={async () => { try { await ledFill(0, 0, 255); } catch (e) { setError(String(e)); } }} style={{ background: "#3498db", border: "none", borderRadius: 4, padding: "6px 8px", fontSize: 10, cursor: "pointer", color: "#fff" }}>Blue</button>
+                <button onClick={async () => { try { await ledAllOff(); } catch (e) { setError(String(e)); } }} style={{ background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 4, padding: "6px 8px", fontSize: 10, cursor: "pointer", color: TEXT2 }}>Off</button>
+              </div>
+            </>
+          )}
+
+          {error && (
+            <div style={{ background: "#3a1515", borderRadius: 4, padding: 6, fontSize: 10, color: "#ff6b6b", lineHeight: 1.35 }}>
+              {error}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

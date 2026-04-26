@@ -40,6 +40,7 @@ export interface LedConfig {
   deviceId: number;
   pixelCount: number;
   layoutPath: string | null;
+  cameraDeviceId: string | null;
 }
 
 export interface CalibrationPoint {

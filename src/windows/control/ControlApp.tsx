@@ -61,6 +61,7 @@ export default function ControlApp() {
   const ledFrameRef = useRef(0);
   const [outputDecorated, setOutputDecorated] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("output");
+  const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
 
   const aiConfig = useAiStore((s) => s.config);
   const aiGenerating = useAiStore((s) => s.generating);
@@ -156,20 +157,33 @@ export default function ControlApp() {
   }, [aiGenerate, selectedScene, updateSceneCode]);
 
   const openLedMapping = useCallback(async () => {
-    const existing = await WebviewWindow.getByLabel("led-mapping");
-    if (existing) {
-      await existing.setFocus();
-      return;
+    try {
+      const existing = await WebviewWindow.getByLabel("led-mapping");
+      if (existing) {
+        await existing.show();
+        await existing.unminimize();
+        await existing.setFocus();
+        setLedMappingStatus("Calibration window focused");
+        return;
+      }
+      setLedMappingStatus("Opening calibration window...");
+      const win = new WebviewWindow("led-mapping", {
+        url: "/led-mapping.html",
+        title: "VJLED - LED Calibration",
+        width: 1280,
+        height: 720,
+        decorations: true,
+        resizable: true,
+        focus: true,
+      });
+      win.once("tauri://created", () => setLedMappingStatus("Calibration window open"));
+      win.once("tauri://error", (e) => {
+        console.error("LED Mapping window error:", e);
+        setLedMappingStatus(`Failed to open calibration window: ${String(e.payload)}`);
+      });
+    } catch (e) {
+      setLedMappingStatus(`Failed to open calibration window: ${String(e)}`);
     }
-    const win = new WebviewWindow("led-mapping", {
-      url: "/led-mapping.html",
-      title: "VJLED - LED Mapping",
-      width: 1280,
-      height: 720,
-      decorations: true,
-      resizable: true,
-    });
-    win.once("tauri://error", (e) => console.error("LED Mapping window error:", e));
   }, []);
 
   useEffect(() => {
@@ -396,6 +410,7 @@ export default function ControlApp() {
               outputDecorated={outputDecorated}
               onToggleDecorations={toggleOutputDecorations}
               onOpenLedMapping={openLedMapping}
+              ledMappingStatus={ledMappingStatus}
             />
           )}
           {rightTab === "ai" && (
@@ -415,8 +430,9 @@ export default function ControlApp() {
                 <SectionTitle title="LED Projection" />
                 <p style={helpText}>Single-camera mapping is used here. Python's second source camera is intentionally replaced by the VJ program output canvas.</p>
                 <button onClick={openLedMapping} style={{ ...buttonBase, width: "100%", marginTop: 8, background: SURFACE3, color: TEXT }}>
-                  Open Mapping Window
+                  Open Calibration Window
                 </button>
+                <div style={{ marginTop: 6, color: TEXT2, fontSize: 10 }}>{ledMappingStatus}</div>
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
                 <LedPanel />
@@ -515,7 +531,7 @@ function ProjectPanel({ onSave, onLoad, scenes, selectedScene }: { onSave: () =>
   );
 }
 
-function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorated, onToggleDecorations, onOpenLedMapping }: {
+function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorated, onToggleDecorations, onOpenLedMapping, ledMappingStatus }: {
   busAScene: Scene | undefined;
   busBScene: Scene | undefined;
   crossfade: number;
@@ -523,6 +539,7 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
   outputDecorated: boolean;
   onToggleDecorations: () => void;
   onOpenLedMapping: () => void;
+  ledMappingStatus: string;
 }) {
   return (
     <div style={panelBody}>
@@ -538,8 +555,9 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
         {outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}
       </button>
       <button onClick={onOpenLedMapping} style={{ ...buttonBase, width: "100%", background: SURFACE3, color: TEXT }}>
-        Open LED Mapping
+        Open Calibration Window
       </button>
+      <div style={{ color: TEXT2, fontSize: 10, lineHeight: 1.4 }}>{ledMappingStatus}</div>
       <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
         <SectionTitle title="Python parity" />
         <p style={helpText}>UDP packet flow, brightness/gain curve, project calibration data, and auto calibration match the Python design. Person detection and two-camera floor/source mapping are not implemented in this UI yet; the VJ output replaces the source camera by design.</p>

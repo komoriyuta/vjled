@@ -13,6 +13,7 @@ import {
 } from "../led/commands";
 import { rgbaFromCanvas } from "../led/pixelExtractor";
 import { open } from "@tauri-apps/plugin-dialog";
+import { attachCameraStream, listCalibrationCameras, startCalibrationCamera, type CameraDevice } from "../led/camera";
 import type { CalibrationPoint } from "../types";
 
 const BG = "#111119";
@@ -35,11 +36,41 @@ export default function LedPanel() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"config" | "calibration">("config");
+  const [cameras, setCameras] = useState<CameraDevice[]>([]);
+  const [cameraStatus, setCameraStatus] = useState("Camera stopped");
 
   useEffect(() => {
     if (videoRef.current && cameraStream) {
-      videoRef.current.srcObject = cameraStream;
+      attachCameraStream(videoRef.current, cameraStream)
+        .then((status) => setCameraStatus(status))
+        .catch((e) => setError(`Video playback error: ${String(e)}`));
     }
+  }, [cameraStream]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !cameraStream) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let frame = 0;
+    const draw = () => {
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+      if (width > 0 && height > 0) {
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        ctx.drawImage(video, 0, 0, width, height);
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+
+    return () => cancelAnimationFrame(frame);
   }, [cameraStream]);
 
   const handleConnect = useCallback(async () => {
@@ -111,19 +142,40 @@ export default function LedPanel() {
 
   const startCamera = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
-      });
+      setError(null);
+      const stream = await startCalibrationCamera(config.cameraDeviceId);
       setCameraStream(stream);
+      const track = stream.getVideoTracks()[0];
+      setCameraStatus(track?.label || "Camera stream opened");
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
     } catch (e) {
       setError(`Camera error: ${String(e)}`);
     }
-  }, [setCameraStream]);
+  }, [config.cameraDeviceId, setCameraStream]);
+
+  const refreshCameras = useCallback(async () => {
+    try {
+      setError(null);
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
+      if (!config.cameraDeviceId && devices[0]) {
+        setConfig({ cameraDeviceId: devices[0].deviceId });
+      }
+    } catch (e) {
+      setError(`Camera list error: ${String(e)}`);
+    }
+  }, [config.cameraDeviceId, setConfig]);
+
+  useEffect(() => {
+    if (tab === "calibration") refreshCameras();
+  }, [tab, refreshCameras]);
 
   const stopCamera = useCallback(() => {
     if (cameraStream) {
       cameraStream.getTracks().forEach((t) => t.stop());
       setCameraStream(null);
+      setCameraStatus("Camera stopped");
     }
   }, [cameraStream, setCameraStream]);
 
@@ -344,13 +396,27 @@ export default function LedPanel() {
                 <button onClick={cameraStream ? stopCamera : startCamera} style={{ background: cameraStream ? "#e74c3c" : ACCENT, color: "#fff", border: "none", borderRadius: 4, padding: "4px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
                   {cameraStream ? "Stop Camera" : "Start Camera"}
                 </button>
+                <button onClick={refreshCameras} style={{ background: PANEL, border: `1px solid ${BORDER}`, color: TEXT, borderRadius: 4, padding: "4px 8px", fontSize: 10, cursor: "pointer" }}>
+                  Scan
+                </button>
               </div>
+              <select
+                value={config.cameraDeviceId ?? ""}
+                onChange={(e) => setConfig({ cameraDeviceId: e.target.value || null })}
+                style={{ ...inputStyle, marginTop: 6 }}
+              >
+                <option value="">Default camera</option>
+                {cameras.map((camera) => (
+                  <option key={camera.deviceId} value={camera.deviceId}>{camera.label}</option>
+                ))}
+              </select>
+              <div style={{ marginTop: 4, fontSize: 10, color: TEXT2 }}>{cameraStatus}</div>
             </div>
 
             {cameraStream && (
               <div style={{ position: "relative", background: "#000", borderRadius: 4, overflow: "hidden", aspectRatio: "16/9" }}>
-                <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                <canvas ref={canvasRef} style={{ display: "none" }} />
+                <video ref={videoRef} autoPlay playsInline muted style={{ position: "absolute", width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
+                <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                 {calibrationPoints.length > 0 && (
                   <svg style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
                     {calibrationPoints.map((p) => (

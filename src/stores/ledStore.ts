@@ -32,6 +32,7 @@ export const useLedStore = create<LedStore>((set) => ({
     deviceId: 1,
     pixelCount: 25,
     layoutPath: null,
+    cameraDeviceId: null,
   },
   layoutInfo: null,
   calibrationPoints: [],
