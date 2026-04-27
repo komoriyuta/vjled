@@ -4,6 +4,8 @@ import type { Renderer } from "../renderers/types";
 import { createRenderer } from "../renderers/index";
 import { Compositor } from "../renderers/compositor";
 import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
+import { sendLedFrame } from "../led/pixelExtractor";
+import type { CalibrationPoint, LedConfig } from "../types";
 
 interface UseEngineOptions {
   outputContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -11,6 +13,8 @@ interface UseEngineOptions {
   busAPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   busBPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   selectedPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
+  ledConfig?: LedConfig | null;
+  ledPoints?: CalibrationPoint[];
 }
 
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
@@ -30,7 +34,7 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
 
   const renderersRef = useRef<Map<string, { renderer: Renderer; canvas: HTMLCanvasElement }>>(new Map());
   const compositorRef = useRef<Compositor | null>(null);
@@ -48,6 +52,11 @@ export function useEngine(opts: UseEngineOptions) {
   const prevRef = useRef(0);
   const codeCacheRef = useRef<Map<string, string>>(new Map());
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
+  const ledLastSendRef = useRef(0);
+  const ledConfigRef = useRef(ledConfig);
+  const ledPointsRef = useRef(ledPoints);
+  ledConfigRef.current = ledConfig;
+  ledPointsRef.current = ledPoints;
 
   const scale = preview ? 0.25 : 1;
   const W = Math.round(1920 * scale);
@@ -188,6 +197,18 @@ export function useEngine(opts: UseEngineOptions) {
         if (selectedSceneId) {
           const selEntry = renderersRef.current.get(selectedSceneId);
           copyCanvas(selEntry?.canvas ?? null, selectedPreviewRef?.current ?? null);
+        }
+
+        if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
+          const now2 = performance.now();
+          if (now2 - ledLastSendRef.current >= 33) {
+            ledLastSendRef.current = now2;
+            const compCanvas = compositorCanvasRef.current;
+            const compCtx = compCanvas.getContext("2d");
+            if (compCtx) {
+              sendLedFrame(compCtx, compCanvas.width, compCanvas.height, ledPointsRef.current, ledConfigRef.current);
+            }
+          }
         }
       }
 
