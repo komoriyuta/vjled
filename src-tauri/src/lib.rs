@@ -1,10 +1,12 @@
 mod ai;
 mod calibration;
 mod led;
+mod link;
 
 use calibration::{Calibrator, CalibrationConfig};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
 use led::layout::HardwareLayout;
+use link::{LinkController, LinkStatus};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -13,6 +15,7 @@ use tauri::State;
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
+    link: LinkController,
 }
 
 #[cfg(target_os = "linux")]
@@ -193,6 +196,31 @@ fn project_load(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn link_configure(
+    enabled: bool,
+    start_stop_sync: bool,
+    quantum: f64,
+    state: State<AppState>,
+) -> Result<LinkStatus, String> {
+    state.link.configure(enabled, start_stop_sync, quantum)
+}
+
+#[tauri::command]
+fn link_set_tempo(bpm: f64, state: State<AppState>) -> Result<LinkStatus, String> {
+    state.link.set_tempo(bpm)
+}
+
+#[tauri::command]
+fn link_set_playing(playing: bool, state: State<AppState>) -> Result<LinkStatus, String> {
+    state.link.set_playing(playing)
+}
+
+#[tauri::command]
+fn link_status(state: State<AppState>) -> Result<LinkStatus, String> {
+    state.link.status()
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -202,10 +230,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            controller: Mutex::new(None),
-            calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
-        })
         .invoke_handler(tauri::generate_handler![
             greet,
             camera_prepare_window,
@@ -224,8 +248,17 @@ pub fn run() {
             calibration_detect_led,
             calibration_has_baseline,
             calibration_reset,
+            link_configure,
+            link_set_tempo,
+            link_set_playing,
+            link_status,
         ])
         .setup(|app| {
+            app.manage(AppState {
+                controller: Mutex::new(None),
+                calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
+                link: LinkController::spawn(app.handle().clone()),
+            });
             if let Some(output_window) = app.get_webview_window("output") {
                 let _ = output_window.set_title("VJLED - Output");
             }

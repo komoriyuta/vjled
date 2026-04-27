@@ -1,7 +1,10 @@
+import type { LinkState } from "../types";
+
 export interface Renderer {
   init(canvas: HTMLCanvasElement): void;
   setCode(code: string): void;
   update(time: number, dt: number): void;
+  setLinkState?(state: LinkState | null): void;
   resize(w: number, h: number): void;
   destroy(): void;
   control?(action: string, value: unknown): void;

@@ -1,4 +1,5 @@
 import type { Renderer } from "../types";
+import type { LinkState } from "../../types";
 
 const VERT = `
 attribute vec2 a_pos;
@@ -11,6 +12,13 @@ uniform float iTime;
 uniform vec2  iResolution;
 uniform vec4  iMouse;
 uniform int   iFrame;
+uniform float iLinkBpm;
+uniform float iLinkBeat;
+uniform float iLinkPhase;
+uniform float iLinkQuantum;
+uniform float iLinkPeers;
+uniform bool  iLinkEnabled;
+uniform bool  iLinkPlaying;
 `;
 
 const SHADERTOY_POSTAMBLE = `
@@ -39,6 +47,7 @@ export class GLSLRenderer implements Renderer {
   private uLocs: Record<string, WebGLUniformLocation | null> = {};
   private frame = 0;
   private code = "";
+  private linkState: LinkState | null = null;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
@@ -98,9 +107,13 @@ export class GLSLRenderer implements Renderer {
 
     this.program = prog;
     this.uLocs = {};
-    for (const name of ["iTime", "iResolution", "iMouse", "iFrame"]) {
+    for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iLinkBpm", "iLinkBeat", "iLinkPhase", "iLinkQuantum", "iLinkPeers", "iLinkEnabled", "iLinkPlaying"]) {
       this.uLocs[name] = gl.getUniformLocation(prog, name);
     }
+  }
+
+  setLinkState(state: LinkState | null): void {
+    this.linkState = state;
   }
 
   private setupQuad(): void {
@@ -127,6 +140,13 @@ export class GLSLRenderer implements Renderer {
     if (this.uLocs.iTime != null) gl.uniform1f(this.uLocs.iTime, time);
     if (this.uLocs.iResolution != null) gl.uniform2f(this.uLocs.iResolution, c.width, c.height);
     if (this.uLocs.iFrame != null) gl.uniform1i(this.uLocs.iFrame, this.frame);
+    if (this.uLocs.iLinkBpm != null) gl.uniform1f(this.uLocs.iLinkBpm, this.linkState?.bpm ?? 120);
+    if (this.uLocs.iLinkBeat != null) gl.uniform1f(this.uLocs.iLinkBeat, this.linkState?.beat ?? 0);
+    if (this.uLocs.iLinkPhase != null) gl.uniform1f(this.uLocs.iLinkPhase, this.linkState?.phase ?? 0);
+    if (this.uLocs.iLinkQuantum != null) gl.uniform1f(this.uLocs.iLinkQuantum, this.linkState?.quantum ?? 4);
+    if (this.uLocs.iLinkPeers != null) gl.uniform1f(this.uLocs.iLinkPeers, this.linkState?.peers ?? 0);
+    if (this.uLocs.iLinkEnabled != null) gl.uniform1i(this.uLocs.iLinkEnabled, this.linkState?.enabled ? 1 : 0);
+    if (this.uLocs.iLinkPlaying != null) gl.uniform1i(this.uLocs.iLinkPlaying, this.linkState?.playing ? 1 : 0);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.frame++;
