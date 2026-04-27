@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { open } from "@tauri-apps/plugin-dialog";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
@@ -149,6 +148,23 @@ export default function ControlApp() {
       updateSceneCode(selectedScene.id, code);
     } catch {}
   }, [aiGenerate, selectedScene, updateSceneCode]);
+
+  const openLedMapping = useCallback(async () => {
+    const existing = await WebviewWindow.getByLabel("led-mapping");
+    if (existing) {
+      await existing.setFocus();
+      return;
+    }
+    const win = new WebviewWindow("led-mapping", {
+      url: "/led-mapping.html",
+      title: "VJLED - LED Mapping",
+      width: 1280,
+      height: 720,
+      decorations: true,
+      resizable: true,
+    });
+    win.once("tauri://error", (e) => console.error("LED Mapping window error:", e));
+  }, []);
 
   useEffect(() => {
     if (!ledConfig.enabled || ledPoints.length === 0) return;
@@ -407,6 +423,21 @@ export default function ControlApp() {
                 }}
               >
                 LED
+              </button>
+              <button
+                onClick={openLedMapping}
+                style={{
+                  background: "none",
+                  border: `1px solid ${BORDER}`,
+                  color: TEXT2,
+                  fontSize: 9,
+                  borderRadius: 3,
+                  padding: "1px 6px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Map
               </button>
               <button
                 onClick={toggleOutputDecorations}
