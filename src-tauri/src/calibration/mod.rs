@@ -38,6 +38,7 @@ impl Default for CalibrationConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CalibrationResult {
     pub lantern_positions: HashMap<usize, (f64, f64)>,
     pub total_lanterns: usize,

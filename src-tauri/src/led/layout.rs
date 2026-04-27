@@ -56,6 +56,7 @@ fn default_controller_ip_start() -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolvedStrip {
     pub pin: u8,
     pub pixel_count: usize,
@@ -63,6 +64,7 @@ pub struct ResolvedStrip {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolvedDevice {
     pub key: String,
     pub device_id: u16,
@@ -73,6 +75,7 @@ pub struct ResolvedDevice {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ResolvedLayout {
     pub broadcast_ip: String,
     pub port: u16,

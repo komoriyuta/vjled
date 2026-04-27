@@ -1,3 +1,4 @@
+mod ai;
 mod calibration;
 mod led;
 
@@ -122,6 +123,42 @@ fn calibration_reset(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn ai_generate(
+    base_url: String,
+    api_key: String,
+    model: String,
+    scene_type: String,
+    prompt: String,
+    existing_code: Option<String>,
+) -> Result<String, String> {
+    ai::generate_code(
+        &base_url,
+        &api_key,
+        &model,
+        &scene_type,
+        &prompt,
+        existing_code.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+fn project_save(path: String, data: serde_json::Value) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(&data)
+        .map_err(|e| format!("Serialize error: {}", e))?;
+    std::fs::write(&path, json)
+        .map_err(|e| format!("Write error: {}", e))
+}
+
+#[tauri::command]
+fn project_load(path: String) -> Result<serde_json::Value, String> {
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Read error: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Parse error: {}", e))
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -137,6 +174,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            ai_generate,
+            project_save,
+            project_load,
             led_load_layout,
             led_init_simple,
             led_send_colors,
