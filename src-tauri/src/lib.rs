@@ -15,6 +15,40 @@ struct AppState {
     calibrator: Mutex<Calibrator>,
 }
 
+#[cfg(target_os = "linux")]
+fn configure_camera_webview<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(), String> {
+    window
+        .with_webview(|webview| {
+            use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
+
+            let inner = webview.inner();
+            if let Some(settings) = inner.settings() {
+                settings.set_enable_media(true);
+                settings.set_enable_media_stream(true);
+            }
+
+            inner.connect_permission_request(|_, request| {
+                request.allow();
+                true
+            });
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_camera_webview<R: tauri::Runtime>(
+    _window: &tauri::WebviewWindow<R>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn camera_prepare_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    configure_camera_webview(&window)
+}
+
 #[tauri::command]
 fn led_load_layout(path: String, state: State<AppState>) -> Result<LayoutInfo, String> {
     let layout = HardwareLayout::load(std::path::Path::new(&path))?;
@@ -174,6 +208,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            camera_prepare_window,
             ai_generate,
             project_save,
             project_load,
@@ -193,6 +228,12 @@ pub fn run() {
         .setup(|app| {
             if let Some(output_window) = app.get_webview_window("output") {
                 let _ = output_window.set_title("VJLED - Output");
+            }
+            if let Some(control_window) = app.get_webview_window("control") {
+                let _ = configure_camera_webview(&control_window);
+            }
+            if let Some(mapping_window) = app.get_webview_window("led-mapping") {
+                let _ = configure_camera_webview(&mapping_window);
             }
             Ok(())
         })
