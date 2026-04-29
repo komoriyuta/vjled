@@ -17,6 +17,8 @@ interface VJStore extends VJState {
   setPlaying: (p: boolean) => void;
   selectScene: (id: string | null) => void;
   loadProject: (data: VJState) => void;
+  setBpm: (bpm: number) => void;
+  setVideoSync: (sceneId: string, sync: import("../types").VideoSync) => void;
 }
 
 let _nextId = 1;
@@ -28,6 +30,7 @@ export const useVJStore = create<VJStore>((set, get) => ({
   crossfade: 0,
   isPlaying: true,
   selectedSceneId: null,
+  bpm: 120,
 
   addScene: (type) => {
     const id = `scene-${_nextId++}`;
@@ -103,6 +106,11 @@ export const useVJStore = create<VJStore>((set, get) => ({
 
   setPlaying: (p) => set({ isPlaying: p }),
   selectScene: (id) => set({ selectedSceneId: id }),
+  setBpm: (bpm) => set({ bpm: Math.max(1, Math.min(300, bpm)) }),
+  setVideoSync: (sceneId, sync) =>
+    set((s) => ({
+      scenes: s.scenes.map((sc) => (sc.id === sceneId ? { ...sc, videoSync: sync } : sc)),
+    })),
   loadProject: (data) => {
     const maxNum = data.scenes.reduce((max, s) => {
       const m = s.id.match(/scene-(\d+)/);
@@ -116,6 +124,7 @@ export const useVJStore = create<VJStore>((set, get) => ({
       crossfade: data.crossfade,
       isPlaying: data.isPlaying,
       selectedSceneId: data.selectedSceneId,
+      bpm: data.bpm ?? 120,
     });
   },
 }));

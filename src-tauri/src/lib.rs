@@ -1,6 +1,7 @@
 mod ai;
 mod calibration;
 mod led;
+mod video_server;
 
 use calibration::{Calibrator, CalibrationConfig};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
@@ -13,6 +14,7 @@ use tauri::State;
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
+    video_server_port: u16,
 }
 
 #[tauri::command]
@@ -159,6 +161,11 @@ fn project_load(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+fn get_video_server_port(state: State<AppState>) -> u16 {
+    state.video_server_port
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -168,12 +175,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            controller: Mutex::new(None),
-            calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
+        .manage({
+            let server = video_server::VideoFileServer::start();
+            AppState {
+                controller: Mutex::new(None),
+                calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
+                video_server_port: server.port,
+            }
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            get_video_server_port,
             ai_generate,
             project_save,
             project_load,

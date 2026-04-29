@@ -10,6 +10,10 @@ export class VideoRenderer implements Renderer {
   private loopEnd = -1;
   private boundOnTimeUpdate: (() => void) | null = null;
   private boundOnEnded: (() => void) | null = null;
+  private syncEnabled = false;
+  private measuresPerLoop = 1;
+  private bpm = 120;
+  private loopPhaseStart = 0;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
@@ -30,12 +34,27 @@ export class VideoRenderer implements Renderer {
 
   private syncNativeLoop(): void {
     if (!this.video) return;
-    this.video.loop = this.loopEnabled && this.loopStart <= 0 && this.loopEnd < 0;
+    this.video.loop = this.loopEnabled && !this.syncEnabled && this.loopStart <= 0 && this.loopEnd < 0;
   }
 
   private getLoopEnd(): number {
     if (!this.video) return -1;
+    if (this.syncEnabled && this.bpm > 0) {
+      const loopDuration = this.measuresPerLoop * 240 / this.bpm;
+      const end = this.loopStart + loopDuration;
+      const maxEnd = this.video.duration || 0;
+      return maxEnd > 0 ? Math.min(end, maxEnd) : end;
+    }
     return this.loopEnd >= 0 ? this.loopEnd : this.video.duration;
+  }
+
+  private getLoopDuration(): number {
+    if (this.syncEnabled && this.bpm > 0) {
+      return this.measuresPerLoop * 240 / this.bpm;
+    }
+    if (!this.video) return 0;
+    const end = this.loopEnd >= 0 ? this.loopEnd : this.video.duration;
+    return end - this.loopStart;
   }
 
   private enforceLoop(): void {
@@ -43,6 +62,7 @@ export class VideoRenderer implements Renderer {
     const end = this.getLoopEnd();
     if (end > 0 && this.video.currentTime >= end) {
       this.video.currentTime = this.loopStart;
+      this.loopPhaseStart = performance.now();
       if (this.video.paused) {
         this.video.play().catch(() => {});
       }
@@ -64,6 +84,7 @@ export class VideoRenderer implements Renderer {
     this.currentSrc = src;
     this.loopStart = 0;
     this.loopEnd = -1;
+    this.loopPhaseStart = performance.now();
     this.video.src = src;
     this.syncNativeLoop();
     this.video.load();
@@ -72,7 +93,22 @@ export class VideoRenderer implements Renderer {
 
   update(_time: number, _dt: number): void {
     if (!this.video || !this.ctx || !this.canvas) return;
-    this.enforceLoop();
+
+    if (this.syncEnabled && this.loopEnabled && this.bpm > 0 && this.video.readyState >= 2) {
+      const elapsed = (performance.now() - this.loopPhaseStart) / 1000;
+      const loopDuration = this.measuresPerLoop * 240 / this.bpm;
+      if (loopDuration > 0 && elapsed >= loopDuration) {
+        const loops = Math.floor(elapsed / loopDuration);
+        this.loopPhaseStart += loops * loopDuration * 1000;
+        this.video.currentTime = this.loopStart;
+        if (this.video.paused) {
+          this.video.play().catch(() => {});
+        }
+      }
+    } else {
+      this.enforceLoop();
+    }
+
     if (this.video.readyState >= 2) {
       this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
     }
@@ -88,7 +124,10 @@ export class VideoRenderer implements Renderer {
         this.video.pause();
         break;
       case "seek":
-        if (typeof value === "number") this.video.currentTime = value;
+        if (typeof value === "number") {
+          this.video.currentTime = value;
+          this.loopPhaseStart = performance.now() - (value - this.loopStart) * 1000;
+        }
         break;
       case "loop":
         this.loopEnabled = !!value;
@@ -98,6 +137,7 @@ export class VideoRenderer implements Renderer {
         if (typeof value === "number") {
           this.loopStart = value;
           this.syncNativeLoop();
+          this.loopPhaseStart = performance.now();
         }
         break;
       case "loopEnd":
@@ -106,6 +146,17 @@ export class VideoRenderer implements Renderer {
           this.syncNativeLoop();
         }
         break;
+      case "syncSettings": {
+        const v = value as { enabled?: boolean; measuresPerLoop?: number; bpm?: number };
+        if (v.enabled !== undefined) this.syncEnabled = v.enabled;
+        if (v.measuresPerLoop !== undefined) this.measuresPerLoop = v.measuresPerLoop;
+        if (v.bpm !== undefined) this.bpm = v.bpm;
+        this.syncNativeLoop();
+        if (this.syncEnabled) {
+          this.loopPhaseStart = performance.now();
+        }
+        break;
+      }
       case "volume":
         if (typeof value === "number") this.video.volume = Math.max(0, Math.min(1, value));
         break;
@@ -124,6 +175,15 @@ export class VideoRenderer implements Renderer {
       loop: this.loopEnabled,
       loopStart: this.loopStart,
       loopEnd: this.loopEnd >= 0 ? this.loopEnd : (this.video.duration || 0),
+    };
+  }
+
+  getSyncInfo(): { enabled: boolean; measuresPerLoop: number; bpm: number; loopDuration: number } | null {
+    return {
+      enabled: this.syncEnabled,
+      measuresPerLoop: this.measuresPerLoop,
+      bpm: this.bpm,
+      loopDuration: this.getLoopDuration(),
     };
   }
 
