@@ -1,4 +1,5 @@
 import type { Renderer } from "../types";
+import type { AudioAnalysis } from "../../types";
 
 export class VideoRenderer implements Renderer {
   private video: HTMLVideoElement | null = null;
@@ -8,6 +9,10 @@ export class VideoRenderer implements Renderer {
   private loopEnabled = true;
   private loopStart = 0;
   private loopEnd = -1;
+  private bpmLoop = false;
+  private beatsPerLoop = 4;
+  private bpmBaseBeat = 0;
+  private lastSyncedBeat = -1;
   private boundOnTimeUpdate: (() => void) | null = null;
   private boundOnEnded: (() => void) | null = null;
 
@@ -30,17 +35,31 @@ export class VideoRenderer implements Renderer {
 
   private syncNativeLoop(): void {
     if (!this.video) return;
-    this.video.loop = this.loopEnabled && this.loopStart <= 0 && this.loopEnd < 0;
+    this.video.loop = this.loopEnabled && !this.bpmLoop && this.loopStart <= 0 && this.loopEnd < 0;
   }
 
-  private getLoopEnd(): number {
+  private getLoopEnd(audio?: AudioAnalysis): number {
     if (!this.video) return -1;
+    if (this.bpmLoop && audio && audio.bpm > 0) {
+      return this.loopStart + (this.beatsPerLoop * 60) / audio.bpm;
+    }
     return this.loopEnd >= 0 ? this.loopEnd : this.video.duration;
   }
 
-  private enforceLoop(): void {
+  private enforceLoop(audio?: AudioAnalysis): void {
     if (!this.video || !this.loopEnabled) return;
-    const end = this.getLoopEnd();
+    if (this.bpmLoop && audio && audio.bpm > 0 && audio.beat && audio.beatCount !== this.lastSyncedBeat) {
+      this.lastSyncedBeat = audio.beatCount;
+      if (this.bpmBaseBeat === 0) this.bpmBaseBeat = audio.beatCount;
+      const elapsedBeats = audio.beatCount - this.bpmBaseBeat;
+      if (elapsedBeats > 0 && elapsedBeats % this.beatsPerLoop === 0) {
+        this.video.currentTime = this.loopStart;
+        if (this.video.paused) this.video.play().catch(() => {});
+        return;
+      }
+    }
+
+    const end = this.getLoopEnd(audio);
     if (end > 0 && this.video.currentTime >= end) {
       this.video.currentTime = this.loopStart;
       if (this.video.paused) {
@@ -64,15 +83,17 @@ export class VideoRenderer implements Renderer {
     this.currentSrc = src;
     this.loopStart = 0;
     this.loopEnd = -1;
+    this.bpmBaseBeat = 0;
+    this.lastSyncedBeat = -1;
     this.video.src = src;
     this.syncNativeLoop();
     this.video.load();
     this.video.play().catch(() => {});
   }
 
-  update(_time: number, _dt: number): void {
+  update(_time: number, _dt: number, audio: AudioAnalysis): void {
     if (!this.video || !this.ctx || !this.canvas) return;
-    this.enforceLoop();
+    this.enforceLoop(audio);
     if (this.video.readyState >= 2) {
       this.ctx.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
     }
@@ -106,6 +127,18 @@ export class VideoRenderer implements Renderer {
           this.syncNativeLoop();
         }
         break;
+      case "bpmLoop":
+        this.bpmLoop = !!value;
+        this.bpmBaseBeat = 0;
+        this.lastSyncedBeat = -1;
+        this.syncNativeLoop();
+        break;
+      case "beatsPerLoop":
+        if (typeof value === "number" && isFinite(value)) {
+          this.beatsPerLoop = Math.max(1, Math.min(64, Math.round(value)));
+          this.bpmBaseBeat = 0;
+        }
+        break;
       case "volume":
         if (typeof value === "number") this.video.volume = Math.max(0, Math.min(1, value));
         break;
@@ -115,7 +148,7 @@ export class VideoRenderer implements Renderer {
     }
   }
 
-  getVideoInfo(): { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number } | null {
+  getVideoInfo(): { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number; bpmLoop: boolean; beatsPerLoop: number } | null {
     if (!this.video) return null;
     return {
       currentTime: this.video.currentTime,
@@ -124,6 +157,8 @@ export class VideoRenderer implements Renderer {
       loop: this.loopEnabled,
       loopStart: this.loopStart,
       loopEnd: this.loopEnd >= 0 ? this.loopEnd : (this.video.duration || 0),
+      bpmLoop: this.bpmLoop,
+      beatsPerLoop: this.beatsPerLoop,
     };
   }
 

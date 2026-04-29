@@ -11,8 +11,9 @@ LED制御はRustにフル移植予定。
 | 1 | 基本スキャフォールド (Tauri v2 + React + Vite + 2ウィンドウ) | **完了** |
 | 2 | レンダリングエンジン統合 (GLSL, p5.js, Three.js, Video) | **完了** |
 | 3 | VJコントロール (A/Bバス、クロスフェーダー、プレビュー、Monacoエディタ) | **完了** |
-| 4 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
-| 5 | AI統合 (コード生成, 映像生成) | 未着手 |
+| 4 | 音声解析統合 (Mic入力, FFT, BPM, beat同期) | **完了** |
+| 5 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
+| 6 | AI統合 (コード生成, 映像生成) | 未着手 |
 
 ---
 
@@ -38,9 +39,10 @@ npm run tauri build
   - 中央上: Program Outputを主プレビューとして配置し、Bus A/B/Selectedの小プレビューを監視用に分離
   - 中央下: クロスフェーダー (CUT A/B, FADE A/B, PLAY/PAUSE)
   - 中央下: Monacoコードエディタ / Video専用コントロール
-  - 右: Project / Output / AI / LED のタブ付き操作バー
+  - 右: Project / Output / Audio / AI / LED のタブ付き操作バー
     - Project: Save/Load とプロジェクト状態
     - Output: 出力ウィンドウ設定、LED Mapping起動、Python仕様との差分メモ
+    - Audio: マイク選択、FFT/BPM/beat解析状態、レンダラ変数確認
     - AI: 生成/編集プロンプトとAPI設定
     - LED: 単一カメラLEDマッピング、UDP出力、キャリブレーション
 - **Output ウィンドウ** (`/output.html`, 1280x720, フレームレス): フルスクリーン映像出力
@@ -59,6 +61,23 @@ Bus B Scene → RendererB → offscreen canvas B ─┘
                crossfade (0=A〜1=B)
 ```
 
+### 音声解析パイプライン
+```
+Selected Mic → Web Audio AnalyserNode ─┬→ volume / bass / mid / treble
+                                       ├→ 32-band FFT
+                                       └→ bass transient beat detection → BPM / beatPhase
+
+Control Window Zustand audio state → emit("vj-state") → Output Window
+Renderer.update(time, dt, audio) → GLSL / p5 / Three.js / Video
+```
+
+- マイクは Control ウィンドウの Audio タブで選択する。
+- BPMは低域エネルギーのトランジェント間隔から推定し、70〜180 BPMへ正規化する。
+- Videoレンダラは `BPM LOOP` 有効時、`loopStart` から `beatsPerLoop` 拍ぶんをループ長として扱い、BPMビート境界で再同期する。
+- GLSL uniforms: `iAudioVolume`, `iAudioBass`, `iAudioMid`, `iAudioTreble`, `iBpm`, `iBeat`, `iBeatPhase`, `iBeatCount`, `iFft[32]`
+- p5 globals: `audioVolume`, `audioBass`, `audioMid`, `audioTreble`, `bpm`, `beat`, `beatPhase`, `beatCount`, `fft`
+- Three.js: `update(state, time, dt, audio)` の第4引数で同じ値を受け取る。
+
 ---
 
 ## 実装済みモジュール一覧
@@ -70,6 +89,7 @@ Bus B Scene → RendererB → offscreen canvas B ─┘
 | `types/index.ts` | `Scene`, `SceneType`, `BusLabel`, `VJState` 型定義 |
 | `defaults.ts` | タイプ別デフォルトコード (Shadertoy GLSL, Three.js, p5.js) |
 | `stores/vjStore.ts` | Zustandグローバル状態: シーンCRUD, A/Bバス, クロスフェーダー, フェードアニメーション |
+| `hooks/useAudioAnalysis.ts` | Web Audio APIによるマイク選択、FFT、BPM/beat解析 |
 | `hooks/useEngine.ts` | レンダリングエンジンフック: レンダラ生成/破棄, コンポジタ, アニメーションループ |
 | `renderers/types.ts` | `Renderer` インターフェース: `init`, `setCode`, `update`, `resize`, `destroy` |
 | `renderers/glsl/GLSLRenderer.ts` | GLSL/Shadertoyレンダラ (mainImage自動ラップ, iTime/iResolution/iFrame対応) |

@@ -6,7 +6,8 @@ import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
 import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
-import type { Scene, SceneType, BusLabel } from "../../types";
+import { useAudioAnalysis } from "../../hooks/useAudioAnalysis";
+import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
@@ -30,7 +31,7 @@ const typeColors: Record<SceneType, string> = {
   video: "#f59e0b",
 };
 
-type RightTab = "project" | "output" | "ai" | "led";
+type RightTab = "project" | "output" | "audio" | "ai" | "led";
 
 function formatTime(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -48,8 +49,13 @@ export default function ControlApp() {
     cutToA, cutToB, fadeToA, fadeToB,
     setPlaying, selectScene,
   } = useVJStore();
+  useAudioAnalysis();
 
   const loadProject = useVJStore((s) => s.loadProject);
+  const audio = useVJStore((s) => s.audio);
+  const audioDevices = useVJStore((s) => s.audioDevices);
+  const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
+  const setAudioDevice = useVJStore((s) => s.setAudioDevice);
   const ledLoadProject = useLedStore((s) => s.loadProject);
   const ledConfig = useLedStore((s) => s.config);
   const ledPoints = useLedStore((s) => s.calibrationPoints);
@@ -209,6 +215,7 @@ export default function ControlApp() {
         crossfade: state.crossfade,
         isPlaying: state.isPlaying,
         selectedSceneId: state.selectedSceneId,
+        audio: state.audio,
       });
     };
 
@@ -348,7 +355,7 @@ export default function ControlApp() {
           <div style={{ flex: 1, borderRadius: 12, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
             {selectedScene ? (
               selectedScene.type === "video" ? (
-                <VideoEditor scene={selectedScene} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} />
+                <VideoEditor scene={selectedScene} audio={audio} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} />
               ) : (
                 <Editor
                   height="100%"
@@ -378,7 +385,7 @@ export default function ControlApp() {
       <aside style={{ borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
         <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}` }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            {(["project", "output", "ai", "led"] as RightTab[]).map((tab) => (
+            {(["project", "output", "audio", "ai", "led"] as RightTab[]).map((tab) => (
               <button key={tab} onClick={() => setRightTab(tab)} style={{ ...buttonBase, background: rightTab === tab ? ACCENT : SURFACE2, borderColor: rightTab === tab ? ACCENT : BORDER, color: rightTab === tab ? "#001018" : TEXT2 }}>
                 {tab.toUpperCase()}
               </button>
@@ -396,6 +403,17 @@ export default function ControlApp() {
               outputDecorated={outputDecorated}
               onToggleDecorations={toggleOutputDecorations}
               onOpenLedMapping={openLedMapping}
+            />
+          )}
+          {rightTab === "audio" && (
+            <AudioPanel
+              audio={audio}
+              devices={audioDevices}
+              onToggle={setAudioEnabled}
+              onDevice={(id) => {
+                const device = audioDevices.find((d) => d.deviceId === id);
+                setAudioDevice(id, device?.label);
+              }}
             />
           )}
           {rightTab === "ai" && (
@@ -548,6 +566,67 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
   );
 }
 
+function AudioPanel({ audio, devices, onToggle, onDevice }: {
+  audio: AudioAnalysis;
+  devices: AudioInputDevice[];
+  onToggle: (enabled: boolean) => void;
+  onDevice: (deviceId: string) => void;
+}) {
+  return (
+    <div style={panelBody}>
+      <SectionTitle title="Audio Analysis" />
+      <p style={helpText}>Mic input drives FFT bands, volume, bass/mid/treble, beat detection, BPM, renderer variables, and BPM-synced video loop timing.</p>
+      <button onClick={() => onToggle(!audio.enabled)} style={{ ...buttonBase, width: "100%", background: audio.enabled ? ACCENT : SURFACE3, borderColor: audio.enabled ? ACCENT : BORDER, color: audio.enabled ? "#001018" : TEXT }}>
+        {audio.enabled ? "Stop Mic" : "Start Mic"}
+      </button>
+      <label>
+        <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Input Device</div>
+        <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
+          <option value="">Default microphone</option>
+          {devices.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+          ))}
+        </select>
+      </label>
+      <InfoGrid rows={[
+        ["Status", audio.permission],
+        ["Device", audio.deviceLabel || devices.find((d) => d.deviceId === audio.deviceId)?.label || "Default"],
+        ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
+        ["Beat", audio.beat ? "Yes" : "No"],
+        ["Phase", `${(audio.beatPhase * 100).toFixed(0)}%`],
+        ["Confidence", `${(audio.beatConfidence * 100).toFixed(0)}%`],
+      ]} />
+      <Meter label="Volume" value={audio.volume} color={ACCENT} />
+      <Meter label="Bass" value={audio.bass} color={OK} />
+      <Meter label="Mid" value={audio.mid} color="#facc15" />
+      <Meter label="Treble" value={audio.treble} color={ACCENT2} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(16, 1fr)", gap: 2, alignItems: "end", height: 56, padding: 8, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
+        {audio.fft.slice(0, 32).map((v, i) => (
+          <div key={i} style={{ height: `${Math.max(3, v * 48)}px`, background: i < 6 ? OK : i < 18 ? ACCENT : ACCENT2, borderRadius: 3 }} />
+        ))}
+      </div>
+      <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
+        <SectionTitle title="Renderer Variables" />
+        <p style={helpText}>GLSL: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]. p5/Three receive matching audio fields.</p>
+      </div>
+    </div>
+  );
+}
+
+function Meter({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", color: TEXT2, fontSize: 10, fontWeight: 900, textTransform: "uppercase", marginBottom: 4 }}>
+        <span>{label}</span>
+        <span>{(value * 100).toFixed(0)}%</span>
+      </div>
+      <div style={{ height: 8, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 999, overflow: "hidden" }}>
+        <div style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%`, height: "100%", background: color }} />
+      </div>
+    </div>
+  );
+}
+
 function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene }: {
   generating: boolean;
   error: string | null;
@@ -606,11 +685,12 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   );
 }
 
-function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
+function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo }: {
   scene: Scene;
+  audio: AudioAnalysis;
   onPick: () => void;
   sendCommand: (id: string, action: string, value: unknown) => void;
-  getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number } | null;
+  getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number; bpmLoop: boolean; beatsPerLoop: number } | null;
 }) {
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
@@ -618,6 +698,8 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
   const [duration, setDuration] = useState(0);
   const [loopStart, setLoopStart] = useState(0);
   const [loopEnd, setLoopEnd] = useState(0);
+  const [bpmLoop, setBpmLoop] = useState(false);
+  const [beatsPerLoop, setBeatsPerLoop] = useState(4);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -629,6 +711,8 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
         setLoop(info.loop);
         setLoopStart(info.loopStart);
         setLoopEnd(info.loopEnd);
+        setBpmLoop(info.bpmLoop);
+        setBeatsPerLoop(info.beatsPerLoop);
       }
     }, 50);
     return () => clearInterval(interval);
@@ -656,6 +740,9 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
             <button onClick={() => sendCommand(scene.id, "loop", !loop)} style={{ ...buttonBase, background: loop ? ACCENT : SURFACE3, borderColor: loop ? ACCENT : BORDER, color: loop ? "#001018" : TEXT2 }}>
               {loop ? "LOOP" : "ONCE"}
             </button>
+            <button onClick={() => sendCommand(scene.id, "bpmLoop", !bpmLoop)} style={{ ...buttonBase, background: bpmLoop ? OK : SURFACE3, borderColor: bpmLoop ? OK : BORDER, color: bpmLoop ? "#001018" : TEXT2 }}>
+              BPM LOOP
+            </button>
             <span style={{ color: TEXT2, fontSize: 12, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
@@ -669,6 +756,17 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
             <button onClick={() => sendCommand(scene.id, "loopEnd", currentTime)} style={secondaryButton(false)}>Set Out</button>
             <button onClick={() => sendCommand(scene.id, "seek", loopStart)} style={secondaryButton(false)}>Go In</button>
             <button onClick={() => { sendCommand(scene.id, "loopStart", 0); sendCommand(scene.id, "loopEnd", -1); }} style={secondaryButton(false)}>Reset</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", padding: 10, border: `1px solid ${BORDER}`, borderRadius: 10, background: "#0c111a" }}>
+            <div>
+              <SectionTitle title="BPM Loop Timing" />
+              <p style={{ ...helpText, marginTop: 4 }}>
+                {audio.bpm > 0 ? `${beatsPerLoop} beats @ ${audio.bpm.toFixed(1)} BPM = ${((beatsPerLoop * 60) / audio.bpm).toFixed(2)}s loop from In point.` : "Start Audio Analysis to lock loop timing to detected BPM."}
+              </p>
+            </div>
+            <select value={beatsPerLoop} onChange={(e) => sendCommand(scene.id, "beatsPerLoop", parseInt(e.target.value, 10))} style={{ ...inputStyle, width: 84 }}>
+              {[1, 2, 4, 8, 16, 32].map((beats) => <option key={beats} value={beats}>{beats} beats</option>)}
+            </select>
           </div>
         </div>
       )}

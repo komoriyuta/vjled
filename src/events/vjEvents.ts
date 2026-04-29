@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { Scene } from "../types";
+import type { AudioAnalysis, Scene } from "../types";
 
 export interface VJStatePayload {
   scenes: Scene[];
@@ -8,6 +8,7 @@ export interface VJStatePayload {
   crossfade: number;
   isPlaying: boolean;
   selectedSceneId: string | null;
+  audio: AudioAnalysis;
 }
 
 export interface VideoCmdPayload {

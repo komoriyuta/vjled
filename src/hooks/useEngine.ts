@@ -6,6 +6,7 @@ import { Compositor } from "../renderers/compositor";
 import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
 import { sendLedFrame } from "../led/pixelExtractor";
 import type { CalibrationPoint, LedConfig } from "../types";
+import { emptyAudioAnalysis } from "../stores/vjStore";
 
 interface UseEngineOptions {
   outputContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -46,6 +47,7 @@ export function useEngine(opts: UseEngineOptions) {
     crossfade: 0,
     isPlaying: true,
     selectedSceneId: null,
+    audio: emptyAudioAnalysis,
   });
   const rafRef = useRef(0);
   const t0Ref = useRef(performance.now());
@@ -168,7 +170,7 @@ export function useEngine(opts: UseEngineOptions) {
     let running = true;
     function loop() {
       if (!running) return;
-      const { busA, busB, crossfade, isPlaying, selectedSceneId } = stateRef.current;
+      const { busA, busB, crossfade, isPlaying, selectedSceneId, audio } = stateRef.current;
       const now = performance.now();
       const time = (now - t0Ref.current) / 1000;
       const dt = time - prevRef.current;
@@ -177,15 +179,15 @@ export function useEngine(opts: UseEngineOptions) {
       if (isPlaying) {
         if (busA) {
           const entry = renderersRef.current.get(busA);
-          if (entry) entry.renderer.update(time, dt);
+          if (entry) entry.renderer.update(time, dt, audio);
         }
         if (busB) {
           const entry = renderersRef.current.get(busB);
-          if (entry) entry.renderer.update(time, dt);
+          if (entry) entry.renderer.update(time, dt, audio);
         }
         if (selectedSceneId && selectedSceneId !== busA && selectedSceneId !== busB) {
           const entry = renderersRef.current.get(selectedSceneId);
-          if (entry) entry.renderer.update(time, dt);
+          if (entry) entry.renderer.update(time, dt, audio);
         }
 
         const cA = busA ? renderersRef.current.get(busA)?.canvas ?? null : null;
