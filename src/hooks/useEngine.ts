@@ -15,6 +15,7 @@ interface UseEngineOptions {
   selectedPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   ledConfig?: LedConfig | null;
   ledPoints?: CalibrationPoint[];
+  getBpm?: () => number;
 }
 
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
@@ -34,7 +35,7 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints, getBpm } = opts;
 
   const renderersRef = useRef<Map<string, { renderer: Renderer; canvas: HTMLCanvasElement }>>(new Map());
   const compositorRef = useRef<Compositor | null>(null);
@@ -46,6 +47,7 @@ export function useEngine(opts: UseEngineOptions) {
     crossfade: 0,
     isPlaying: true,
     selectedSceneId: null,
+    bpm: 120,
   });
   const rafRef = useRef(0);
   const t0Ref = useRef(performance.now());
@@ -54,6 +56,7 @@ export function useEngine(opts: UseEngineOptions) {
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
   const linkStateRef = useRef<LinkState | null>(null);
+  const lastBpmRef = useRef(120);
   const ledConfigRef = useRef(ledConfig);
   const ledPointsRef = useRef(ledPoints);
   ledConfigRef.current = ledConfig;
@@ -154,6 +157,14 @@ export function useEngine(opts: UseEngineOptions) {
             entry.renderer.control?.(cmd.action, cmd.value);
           }
         }
+
+        if (scene.type === "video" && scene.videoSync) {
+          entry.renderer.control?.("syncSettings", {
+            enabled: scene.videoSync.enabled,
+            measuresPerLoop: scene.videoSync.measuresPerLoop,
+            bpm: getBpm?.() ?? 120,
+          });
+        }
       }
     });
 
@@ -177,11 +188,27 @@ export function useEngine(opts: UseEngineOptions) {
     let running = true;
     function loop() {
       if (!running) return;
-      const { busA, busB, crossfade, isPlaying, selectedSceneId } = stateRef.current;
+      const { busA, busB, crossfade, isPlaying, selectedSceneId, scenes } = stateRef.current;
       const now = performance.now();
       const time = (now - t0Ref.current) / 1000;
       const dt = time - prevRef.current;
       prevRef.current = time;
+
+      const currentBpm = getBpm?.() ?? 120;
+      if (currentBpm !== lastBpmRef.current) {
+        lastBpmRef.current = currentBpm;
+        const lookup = new Map(scenes.map((s) => [s.id, s]));
+        for (const [id, entry] of renderersRef.current) {
+          const scene = lookup.get(id);
+          if (scene?.type === "video" && scene.videoSync) {
+            entry.renderer.control?.("syncSettings", {
+              enabled: scene.videoSync.enabled,
+              measuresPerLoop: scene.videoSync.measuresPerLoop,
+              bpm: currentBpm,
+            });
+          }
+        }
+      }
 
       if (isPlaying) {
         if (busA) {

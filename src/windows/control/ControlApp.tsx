@@ -1,8 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { useVJStore } from "../../stores/vjStore";
+import { invoke } from "@tauri-apps/api/core";import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
 import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
@@ -42,11 +41,11 @@ function formatTime(s: number): string {
 export default function ControlApp() {
   const {
     scenes, busA, busB, crossfade, isPlaying,
-    selectedSceneId,
+    selectedSceneId, bpm,
     addScene, removeScene, updateSceneCode,
     setBusA, setBusB, setCrossfade,
     cutToA, cutToB, fadeToA, fadeToB,
-    setPlaying, selectScene,
+    setPlaying, selectScene, setBpm, setVideoSync,
   } = useVJStore();
 
   const loadProject = useVJStore((s) => s.loadProject);
@@ -87,6 +86,7 @@ export default function ControlApp() {
     busAPreviewRef: busACanvasRef,
     busBPreviewRef: busBCanvasRef,
     selectedPreviewRef: selectedCanvasRef,
+    getBpm: () => useVJStore.getState().bpm,
   });
 
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
@@ -235,6 +235,7 @@ export default function ControlApp() {
         crossfade: state.crossfade,
         isPlaying: state.isPlaying,
         selectedSceneId: state.selectedSceneId,
+        bpm: state.bpm,
       });
     };
 
@@ -335,7 +336,9 @@ export default function ControlApp() {
         filters: [{ name: "Video", extensions: ["mp4", "webm", "mov", "avi", "mkv", "ogv"] }],
       });
       if (selected) {
-        updateSceneCode(selectedSceneId, convertFileSrc(selected as string));
+        const port = await invoke<number>("get_video_server_port");
+        const url = `http://127.0.0.1:${port}/${selected as string}`;
+        updateSceneCode(selectedSceneId, url);
       }
     } catch {}
   }
@@ -398,7 +401,7 @@ export default function ControlApp() {
         </section>
 
         <section style={{ padding: "0 12px 10px" }}>
-          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center" }}>
+          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 12, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6 }}>
               <VJButton onClick={cutToA}>CUT A</VJButton>
               <VJButton onClick={fadeToA}>FADE A</VJButton>
@@ -416,6 +419,10 @@ export default function ControlApp() {
               <VJButton onClick={cutToB}>CUT B</VJButton>
               <VJButton onClick={() => setPlaying(!isPlaying)} accent={isPlaying}>{isPlaying ? "PAUSE" : "PLAY"}</VJButton>
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: SURFACE2, padding: "6px 10px", borderRadius: 8, border: `1px solid ${BORDER}` }}>
+              <span style={{ color: TEXT2, fontSize: 10, fontWeight: 900, letterSpacing: 1 }}>BPM</span>
+              <input type="number" min={1} max={300} value={bpm} onChange={(e) => setBpm(parseFloat(e.target.value) || 120)} style={{ width: 52, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 6, color: TEXT, padding: "4px 6px", fontSize: 13, fontWeight: 800, textAlign: "center", fontVariantNumeric: "tabular-nums" }} />
+            </div>
           </div>
         </section>
 
@@ -427,7 +434,7 @@ export default function ControlApp() {
           <div style={{ flex: 1, borderRadius: 12, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
             {selectedScene ? (
               selectedScene.type === "video" ? (
-                <VideoEditor scene={selectedScene} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} />
+                <VideoEditor scene={selectedScene} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} bpm={bpm} onSyncChange={(sync) => setVideoSync(selectedScene.id, sync)} />
               ) : (
                 <Editor
                   height="100%"
@@ -767,11 +774,13 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   );
 }
 
-function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
+function VideoEditor({ scene, onPick, sendCommand, getVideoInfo, bpm, onSyncChange }: {
   scene: Scene;
   onPick: () => void;
   sendCommand: (id: string, action: string, value: unknown) => void;
   getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number } | null;
+  bpm: number;
+  onSyncChange: (sync: import("../../types").VideoSync) => void;
 }) {
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
@@ -779,6 +788,8 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
   const [duration, setDuration] = useState(0);
   const [loopStart, setLoopStart] = useState(0);
   const [loopEnd, setLoopEnd] = useState(0);
+  const sync = scene.videoSync ?? { enabled: false, measuresPerLoop: 1 };
+  const loopDuration = sync.enabled && bpm > 0 ? sync.measuresPerLoop * 240 / bpm : 0;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -830,6 +841,26 @@ function VideoEditor({ scene, onPick, sendCommand, getVideoInfo }: {
             <button onClick={() => sendCommand(scene.id, "loopEnd", currentTime)} style={secondaryButton(false)}>Set Out</button>
             <button onClick={() => sendCommand(scene.id, "seek", loopStart)} style={secondaryButton(false)}>Go In</button>
             <button onClick={() => { sendCommand(scene.id, "loopStart", 0); sendCommand(scene.id, "loopEnd", -1); }} style={secondaryButton(false)}>Reset</button>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 0 0", borderTop: `1px solid ${BORDER}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => onSyncChange({ ...sync, enabled: !sync.enabled })} style={{ ...buttonBase, background: sync.enabled ? ACCENT : SURFACE3, borderColor: sync.enabled ? ACCENT : BORDER, color: sync.enabled ? "#001018" : TEXT2 }}>
+                {sync.enabled ? "SYNC ON" : "SYNC OFF"}
+              </button>
+              <span style={{ color: TEXT2, fontSize: 10, fontWeight: 800, letterSpacing: 1 }}>BPM SYNC</span>
+            </div>
+            {sync.enabled && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: TEXT2, fontSize: 11, fontWeight: 700 }}>Measures</span>
+                <input type="number" min={1} max={64} value={sync.measuresPerLoop} onChange={(e) => onSyncChange({ ...sync, measuresPerLoop: Math.max(1, parseInt(e.target.value) || 1) })} style={{ width: 48, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 6, color: TEXT, padding: "4px 6px", fontSize: 13, fontWeight: 800, textAlign: "center" }} />
+                <span style={{ color: TEXT2, fontSize: 10, textTransform: "uppercase" }}>per loop</span>
+                {loopDuration > 0 && (
+                  <span style={{ color: OK, fontSize: 11, fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>
+                    {loopDuration.toFixed(2)}s / loop
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

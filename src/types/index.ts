@@ -1,10 +1,16 @@
 export type SceneType = "glsl" | "p5" | "threejs" | "video";
 
+export interface VideoSync {
+  enabled: boolean;
+  measuresPerLoop: number;
+}
+
 export interface Scene {
   id: string;
   name: string;
   type: SceneType;
   code: string;
+  videoSync?: VideoSync;
 }
 
 export type BusLabel = "A" | "B";
@@ -16,6 +22,7 @@ export interface VJState {
   crossfade: number;
   isPlaying: boolean;
   selectedSceneId: string | null;
+  bpm: number;
 }
 
 export interface LinkState {

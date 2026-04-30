@@ -2,6 +2,7 @@ mod ai;
 mod calibration;
 mod led;
 mod link;
+mod video_server;
 
 use calibration::{Calibrator, CalibrationConfig};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
@@ -16,6 +17,7 @@ struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
     link: LinkController,
+    video_server_port: u16,
 }
 
 #[cfg(target_os = "linux")]
@@ -221,6 +223,11 @@ fn link_status(state: State<AppState>) -> Result<LinkStatus, String> {
 }
 
 #[tauri::command]
+fn get_video_server_port(state: State<AppState>) -> u16 {
+    state.video_server_port
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -233,6 +240,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             camera_prepare_window,
+            get_video_server_port,
             ai_generate,
             project_save,
             project_load,
@@ -254,10 +262,12 @@ pub fn run() {
             link_status,
         ])
         .setup(|app| {
+            let server = video_server::VideoFileServer::start();
             app.manage(AppState {
                 controller: Mutex::new(None),
                 calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
                 link: LinkController::spawn(app.handle().clone()),
+                video_server_port: server.port,
             });
             if let Some(output_window) = app.get_webview_window("output") {
                 let _ = output_window.set_title("VJLED - Output");
