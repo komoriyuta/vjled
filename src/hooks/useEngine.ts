@@ -6,6 +6,7 @@ import { Compositor } from "../renderers/compositor";
 import { emitVideoCmd, listenLinkState, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
 import { sendLedFrame } from "../led/pixelExtractor";
 import type { CalibrationPoint, LedConfig, LinkState } from "../types";
+import { emptyAudioAnalysis } from "../stores/vjStore";
 
 interface UseEngineOptions {
   outputContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -48,6 +49,7 @@ export function useEngine(opts: UseEngineOptions) {
     isPlaying: true,
     selectedSceneId: null,
     bpm: 120,
+    audio: emptyAudioAnalysis,
   });
   const rafRef = useRef(0);
   const t0Ref = useRef(performance.now());
@@ -188,7 +190,7 @@ export function useEngine(opts: UseEngineOptions) {
     let running = true;
     function loop() {
       if (!running) return;
-      const { busA, busB, crossfade, isPlaying, selectedSceneId, scenes } = stateRef.current;
+      const { busA, busB, crossfade, isPlaying, selectedSceneId, scenes, audio } = stateRef.current;
       const now = performance.now();
       const time = (now - t0Ref.current) / 1000;
       const dt = time - prevRef.current;
@@ -215,21 +217,21 @@ export function useEngine(opts: UseEngineOptions) {
           const entry = renderersRef.current.get(busA);
           if (entry) {
             entry.renderer.setLinkState?.(linkStateRef.current);
-            entry.renderer.update(time, dt);
+            entry.renderer.update(time, dt, audio);
           }
         }
         if (busB) {
           const entry = renderersRef.current.get(busB);
           if (entry) {
             entry.renderer.setLinkState?.(linkStateRef.current);
-            entry.renderer.update(time, dt);
+            entry.renderer.update(time, dt, audio);
           }
         }
         if (selectedSceneId && selectedSceneId !== busA && selectedSceneId !== busB) {
           const entry = renderersRef.current.get(selectedSceneId);
           if (entry) {
             entry.renderer.setLinkState?.(linkStateRef.current);
-            entry.renderer.update(time, dt);
+            entry.renderer.update(time, dt, audio);
           }
         }
 

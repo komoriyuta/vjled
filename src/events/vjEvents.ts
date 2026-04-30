@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { LinkState, Scene } from "../types";
+import type { AudioAnalysis, LinkState, Scene } from "../types";
 
 export interface VJStatePayload {
   scenes: Scene[];
@@ -9,6 +9,7 @@ export interface VJStatePayload {
   isPlaying: boolean;
   selectedSceneId: string | null;
   bpm: number;
+  audio: AudioAnalysis;
 }
 
 export interface VideoCmdPayload {

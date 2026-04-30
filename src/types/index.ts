@@ -23,6 +23,7 @@ export interface VJState {
   isPlaying: boolean;
   selectedSceneId: string | null;
   bpm: number;
+  audio: AudioAnalysis;
 }
 
 export interface LinkState {
@@ -35,6 +36,31 @@ export interface LinkState {
   peers: number;
   playing: boolean;
   micros: number;
+}
+
+export interface AudioInputDevice {
+  deviceId: string;
+  label: string;
+}
+
+export type AudioPermissionState = "idle" | "requesting" | "ready" | "denied" | "error";
+
+export interface AudioAnalysis {
+  enabled: boolean;
+  permission: AudioPermissionState;
+  deviceId: string;
+  deviceLabel: string;
+  volume: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  fft: number[];
+  bpm: number;
+  beat: boolean;
+  beatPhase: number;
+  beatConfidence: number;
+  beatCount: number;
+  lastBeatAt: number;
 }
 
 export interface DeviceInfo {

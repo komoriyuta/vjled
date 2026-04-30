@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import type { Scene, SceneType, VJState } from "../types";
+import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, VJState } from "../types";
 import { getDefaultCode } from "../defaults";
 
 interface VJStore extends VJState {
+  audioDevices: AudioInputDevice[];
   addScene: (type: SceneType) => void;
   removeScene: (id: string) => void;
   updateSceneCode: (id: string, code: string) => void;
@@ -16,12 +17,34 @@ interface VJStore extends VJState {
   fadeToB: () => void;
   setPlaying: (p: boolean) => void;
   selectScene: (id: string | null) => void;
+  setAudioDevices: (devices: AudioInputDevice[]) => void;
+  setAudioDevice: (deviceId: string, label?: string) => void;
+  setAudioEnabled: (enabled: boolean) => void;
+  setAudioAnalysis: (audio: Partial<AudioAnalysis>) => void;
   loadProject: (data: VJState) => void;
   setBpm: (bpm: number) => void;
   setVideoSync: (sceneId: string, sync: import("../types").VideoSync) => void;
 }
 
 let _nextId = 1;
+
+export const emptyAudioAnalysis: AudioAnalysis = {
+  enabled: false,
+  permission: "idle",
+  deviceId: "",
+  deviceLabel: "",
+  volume: 0,
+  bass: 0,
+  mid: 0,
+  treble: 0,
+  fft: Array.from({ length: 32 }, () => 0),
+  bpm: 0,
+  beat: false,
+  beatPhase: 0,
+  beatConfidence: 0,
+  beatCount: 0,
+  lastBeatAt: 0,
+};
 
 export const useVJStore = create<VJStore>((set, get) => ({
   scenes: [],
@@ -31,6 +54,8 @@ export const useVJStore = create<VJStore>((set, get) => ({
   isPlaying: true,
   selectedSceneId: null,
   bpm: 120,
+  audio: emptyAudioAnalysis,
+  audioDevices: [],
 
   addScene: (type) => {
     const id = `scene-${_nextId++}`;
@@ -111,6 +136,32 @@ export const useVJStore = create<VJStore>((set, get) => ({
     set((s) => ({
       scenes: s.scenes.map((sc) => (sc.id === sceneId ? { ...sc, videoSync: sync } : sc)),
     })),
+  setAudioDevices: (devices) => set({ audioDevices: devices }),
+  setAudioDevice: (deviceId, label = "") =>
+    set((s) => ({
+      audio: {
+        ...s.audio,
+        deviceId,
+        deviceLabel: label,
+      },
+    })),
+  setAudioEnabled: (enabled) =>
+    set((s) => ({
+      audio: {
+        ...s.audio,
+        enabled,
+        permission: enabled ? s.audio.permission : "idle",
+        beat: false,
+      },
+    })),
+  setAudioAnalysis: (audio) =>
+    set((s) => ({
+      audio: {
+        ...s.audio,
+        ...audio,
+        fft: audio.fft ?? s.audio.fft,
+      },
+    })),
   loadProject: (data) => {
     const maxNum = data.scenes.reduce((max, s) => {
       const m = s.id.match(/scene-(\d+)/);
@@ -125,6 +176,12 @@ export const useVJStore = create<VJStore>((set, get) => ({
       isPlaying: data.isPlaying,
       selectedSceneId: data.selectedSceneId,
       bpm: data.bpm ?? 120,
+      audio: {
+        ...emptyAudioAnalysis,
+        ...(data.audio ?? {}),
+        enabled: false,
+        beat: false,
+      },
     });
   },
 }));

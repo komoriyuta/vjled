@@ -1,6 +1,7 @@
 import p5 from "p5";
 import type { Renderer } from "../types";
-import type { LinkState } from "../../types";
+import type { AudioAnalysis, LinkState } from "../../types";
+import { emptyAudioAnalysis } from "../../stores/vjStore";
 
 const MATH_CONST = `
 var PI = Math.PI;
@@ -104,6 +105,7 @@ export class P5Renderer implements Renderer {
   private container: HTMLDivElement | null = null;
   private code = "";
   private linkState: LinkState | null = null;
+  private audio: AudioAnalysis = emptyAudioAnalysis;
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
@@ -212,8 +214,19 @@ export class P5Renderer implements Renderer {
     lines.push("var linkPeers = 0;");
     lines.push("var linkEnabled = false;");
     lines.push("var linkPlaying = true;");
+    lines.push("var audio = p.__vjAudio;");
+    lines.push("var audioVolume = 0;");
+    lines.push("var audioBass = 0;");
+    lines.push("var audioMid = 0;");
+    lines.push("var audioTreble = 0;");
+    lines.push("var bpm = 0;");
+    lines.push("var beat = false;");
+    lines.push("var beatPhase = 0;");
+    lines.push("var beatCount = 0;");
+    lines.push("var fft = [];");
     lines.push(`
 var __syncP5Globals = function() {
+  audio = p.__vjAudio;
   width = p.width;
   height = p.height;
   mouseX = p.mouseX;
@@ -235,6 +248,15 @@ var __syncP5Globals = function() {
   linkPeers = link.peers || 0;
   linkEnabled = !!link.enabled;
   linkPlaying = link.playing !== false;
+  audioVolume = audio.volume;
+  audioBass = audio.bass;
+  audioMid = audio.mid;
+  audioTreble = audio.treble;
+  bpm = audio.bpm;
+  beat = audio.beat;
+  beatPhase = audio.beatPhase;
+  beatCount = audio.beatCount;
+  fft = audio.fft;
 };`);
 
     return lines.join("\n");
@@ -256,6 +278,7 @@ var __syncP5Globals = function() {
     try {
       const renderer = this;
       const sketch = (p: p5) => {
+        (p as unknown as { __vjAudio: AudioAnalysis }).__vjAudio = renderer.audio;
         const preamble = renderer.buildPreamble(p);
 
         const body = `${preamble}\n${userCode}\n
@@ -328,7 +351,11 @@ if (typeof mouseDragged === 'function') {
     }
   }
 
-  update(_time: number, _dt: number): void {
+  update(_time: number, _dt: number, audio: AudioAnalysis): void {
+    this.audio = audio;
+    if (this.p5Instance) {
+      (this.p5Instance as unknown as { __vjAudio: AudioAnalysis }).__vjAudio = audio;
+    }
     if (!this.canvas || !this.container) return;
     const pCanvas = this.container.querySelector("canvas");
     if (!pCanvas) return;

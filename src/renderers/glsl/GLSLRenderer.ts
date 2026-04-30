@@ -1,5 +1,5 @@
 import type { Renderer } from "../types";
-import type { LinkState } from "../../types";
+import type { AudioAnalysis, LinkState } from "../../types";
 
 const VERT = `
 attribute vec2 a_pos;
@@ -19,6 +19,15 @@ uniform float iLinkQuantum;
 uniform float iLinkPeers;
 uniform bool  iLinkEnabled;
 uniform bool  iLinkPlaying;
+uniform float iAudioVolume;
+uniform float iAudioBass;
+uniform float iAudioMid;
+uniform float iAudioTreble;
+uniform float iBpm;
+uniform float iBeat;
+uniform float iBeatPhase;
+uniform float iBeatCount;
+uniform float iFft[32];
 `;
 
 const SHADERTOY_POSTAMBLE = `
@@ -107,7 +116,7 @@ export class GLSLRenderer implements Renderer {
 
     this.program = prog;
     this.uLocs = {};
-    for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iLinkBpm", "iLinkBeat", "iLinkPhase", "iLinkQuantum", "iLinkPeers", "iLinkEnabled", "iLinkPlaying"]) {
+    for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iLinkBpm", "iLinkBeat", "iLinkPhase", "iLinkQuantum", "iLinkPeers", "iLinkEnabled", "iLinkPlaying", "iAudioVolume", "iAudioBass", "iAudioMid", "iAudioTreble", "iBpm", "iBeat", "iBeatPhase", "iBeatCount", "iFft"]) {
       this.uLocs[name] = gl.getUniformLocation(prog, name);
     }
   }
@@ -123,7 +132,7 @@ export class GLSLRenderer implements Renderer {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
   }
 
-  update(time: number, _dt: number): void {
+  update(time: number, _dt: number, audio: AudioAnalysis): void {
     const gl = this.gl;
     const c = this.canvas;
     if (!gl || !c || !this.program) return;
@@ -147,6 +156,15 @@ export class GLSLRenderer implements Renderer {
     if (this.uLocs.iLinkPeers != null) gl.uniform1f(this.uLocs.iLinkPeers, this.linkState?.peers ?? 0);
     if (this.uLocs.iLinkEnabled != null) gl.uniform1i(this.uLocs.iLinkEnabled, this.linkState?.enabled ? 1 : 0);
     if (this.uLocs.iLinkPlaying != null) gl.uniform1i(this.uLocs.iLinkPlaying, this.linkState?.playing ? 1 : 0);
+    if (this.uLocs.iAudioVolume != null) gl.uniform1f(this.uLocs.iAudioVolume, audio.volume);
+    if (this.uLocs.iAudioBass != null) gl.uniform1f(this.uLocs.iAudioBass, audio.bass);
+    if (this.uLocs.iAudioMid != null) gl.uniform1f(this.uLocs.iAudioMid, audio.mid);
+    if (this.uLocs.iAudioTreble != null) gl.uniform1f(this.uLocs.iAudioTreble, audio.treble);
+    if (this.uLocs.iBpm != null) gl.uniform1f(this.uLocs.iBpm, audio.bpm);
+    if (this.uLocs.iBeat != null) gl.uniform1f(this.uLocs.iBeat, audio.beat ? 1 : 0);
+    if (this.uLocs.iBeatPhase != null) gl.uniform1f(this.uLocs.iBeatPhase, audio.beatPhase);
+    if (this.uLocs.iBeatCount != null) gl.uniform1f(this.uLocs.iBeatCount, audio.beatCount);
+    if (this.uLocs.iFft != null) gl.uniform1fv(this.uLocs.iFft, new Float32Array(audio.fft.slice(0, 32)));
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.frame++;
