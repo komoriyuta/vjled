@@ -193,7 +193,7 @@ fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigR
 
     if let Ok(supported) = device.supported_input_configs() {
         configs.extend(supported.filter(|c| {
-            c.min_sample_rate().0 >= 8000
+            c.max_sample_rate().0 >= 8000
                 && matches!(
                     c.sample_format(),
                     SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
@@ -204,7 +204,7 @@ fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigR
     if configs.is_empty() {
         if let Ok(supported) = device.supported_output_configs() {
             configs.extend(supported.filter(|c| {
-                c.min_sample_rate().0 >= 8000
+                c.max_sample_rate().0 >= 8000
                     && matches!(
                         c.sample_format(),
                         SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
@@ -224,19 +224,7 @@ fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigR
             SampleFormat::I16 => 2,
             _ => 1,
         };
-        b_priority.cmp(&a_priority).then_with(|| {
-            let a_rate = if a.min_sample_rate().0 <= 48000 {
-                a.min_sample_rate().0
-            } else {
-                0
-            };
-            let b_rate = if b.min_sample_rate().0 <= 48000 {
-                b.min_sample_rate().0
-            } else {
-                0
-            };
-            b_rate.cmp(&a_rate)
-        })
+        b_priority.cmp(&a_priority)
     });
 
     configs.into_iter().next()
@@ -264,12 +252,14 @@ fn run_capture(
     let supported = get_best_config(&device).ok_or("No supported audio config for device")?;
 
     let sample_format = supported.sample_format();
-    let sample_rate = supported.min_sample_rate().0 as usize;
+    let target_rate = 48000
+        .min(supported.max_sample_rate().0)
+        .max(supported.min_sample_rate().0);
     let config = supported
-        .with_sample_rate(cpal::SampleRate(sample_rate as u32))
+        .with_sample_rate(cpal::SampleRate(target_rate))
         .config();
 
-    eprintln!("Audio: format={:?}, rate={}", sample_format, sample_rate);
+    eprintln!("Audio: format={:?}, rate={}", sample_format, target_rate);
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
@@ -303,7 +293,7 @@ fn run_capture(
                         &fft,
                         &mut fft_buffer,
                         &mut state,
-                        sample_rate,
+                        target_rate as usize,
                         &start_time,
                         &running_cb,
                         &app,
@@ -324,7 +314,7 @@ fn run_capture(
                         &fft,
                         &mut fft_buffer,
                         &mut state,
-                        sample_rate,
+                        target_rate as usize,
                         &start_time,
                         &running_cb,
                         &app,
@@ -348,7 +338,7 @@ fn run_capture(
                         &fft,
                         &mut fft_buffer,
                         &mut state,
-                        sample_rate,
+                        target_rate as usize,
                         &start_time,
                         &running_cb,
                         &app,
