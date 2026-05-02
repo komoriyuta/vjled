@@ -26,18 +26,6 @@ export interface VJState {
   audio: AudioAnalysis;
 }
 
-export interface LinkState {
-  enabled: boolean;
-  startStopSync: boolean;
-  bpm: number;
-  beat: number;
-  phase: number;
-  quantum: number;
-  peers: number;
-  playing: boolean;
-  micros: number;
-}
-
 export interface AudioInputDevice {
   deviceId: string;
   label: string;

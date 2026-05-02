@@ -6,8 +6,8 @@ import { useLedStore } from "../../stores/ledStore";
 import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
 import { useAudioAnalysis } from "../../hooks/useAudioAnalysis";
-import type { AudioAnalysis, AudioInputDevice, LinkState, Scene, SceneType, BusLabel } from "../../types";
-import { emitVJState, listenLinkState, listenVJStateRequest } from "../../events/vjEvents";
+import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, BusLabel } from "../../types";
+import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
 import LedPanel from "../../components/LedPanel";
@@ -30,7 +30,7 @@ const typeColors: Record<SceneType, string> = {
   video: "#f59e0b",
 };
 
-type RightTab = "project" | "output" | "link" | "audio" | "ai" | "led";
+type RightTab = "project" | "output" | "audio" | "ai" | "led";
 
 function formatTime(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -67,18 +67,6 @@ export default function ControlApp() {
   const [outputDecorated, setOutputDecorated] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>("output");
   const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
-  const [linkState, setLinkState] = useState<LinkState>({
-    enabled: false,
-    startStopSync: true,
-    bpm: 120,
-    beat: 0,
-    phase: 0,
-    quantum: 4,
-    peers: 0,
-    playing: true,
-    micros: 0,
-  });
-  const [linkBpmDraft, setLinkBpmDraft] = useState("120");
 
   const aiConfig = useAiStore((s) => s.config);
   const aiGenerating = useAiStore((s) => s.generating);
@@ -256,59 +244,6 @@ export default function ControlApp() {
     };
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    invoke<LinkState>("link_status")
-      .then((state) => {
-        if (!mounted) return;
-        setLinkState(state);
-        setLinkBpmDraft(state.bpm.toFixed(1));
-      })
-      .catch((e) => console.error("Link status failed:", e));
-    const unlisten = listenLinkState((state) => {
-      setLinkState(state);
-      setLinkBpmDraft((current) => (document.activeElement?.id === "link-bpm-input" ? current : state.bpm.toFixed(1)));
-    });
-    return () => {
-      mounted = false;
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  const configureLink = useCallback(async (patch: Partial<Pick<LinkState, "enabled" | "startStopSync" | "quantum">>) => {
-    try {
-      const next = await invoke<LinkState>("link_configure", {
-        enabled: patch.enabled ?? linkState.enabled,
-        startStopSync: patch.startStopSync ?? linkState.startStopSync,
-        quantum: patch.quantum ?? linkState.quantum,
-      });
-      setLinkState(next);
-    } catch (e) {
-      console.error("Link configure failed:", e);
-    }
-  }, [linkState.enabled, linkState.startStopSync, linkState.quantum]);
-
-  const setLinkTempo = useCallback(async () => {
-    const bpm = Number(linkBpmDraft);
-    if (!Number.isFinite(bpm)) return;
-    try {
-      const next = await invoke<LinkState>("link_set_tempo", { bpm });
-      setLinkState(next);
-      setLinkBpmDraft(next.bpm.toFixed(1));
-    } catch (e) {
-      console.error("Link tempo failed:", e);
-    }
-  }, [linkBpmDraft]);
-
-  const setLinkTransport = useCallback(async (playing: boolean) => {
-    try {
-      const next = await invoke<LinkState>("link_set_playing", { playing });
-      setLinkState(next);
-    } catch (e) {
-      console.error("Link transport failed:", e);
-    }
-  }, []);
-
   const handleCodeChange = useCallback(
     (value: string | undefined) => {
       if (selectedSceneId && value !== undefined) {
@@ -471,7 +406,7 @@ export default function ControlApp() {
       <aside style={{ borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
         <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}` }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            {(["project", "output", "link", "audio", "ai", "led"] as RightTab[]).map((tab) => (
+            {(["project", "output", "audio", "ai", "led"] as RightTab[]).map((tab) => (
               <button key={tab} onClick={() => setRightTab(tab)} style={{ ...buttonBase, background: rightTab === tab ? ACCENT : SURFACE2, borderColor: rightTab === tab ? ACCENT : BORDER, color: rightTab === tab ? "#001018" : TEXT2 }}>
                 {tab.toUpperCase()}
               </button>
@@ -490,16 +425,6 @@ export default function ControlApp() {
               onToggleDecorations={toggleOutputDecorations}
               onOpenLedMapping={openLedMapping}
               ledMappingStatus={ledMappingStatus}
-            />
-          )}
-          {rightTab === "link" && (
-            <LinkPanel
-              state={linkState}
-              bpmDraft={linkBpmDraft}
-              onBpmDraft={setLinkBpmDraft}
-              onSetTempo={setLinkTempo}
-              onConfigure={configureLink}
-              onTransport={setLinkTransport}
             />
           )}
           {rightTab === "audio" && (
@@ -661,74 +586,6 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
       <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
         <SectionTitle title="Python parity" />
         <p style={helpText}>UDP packet flow, brightness/gain curve, project calibration data, and auto calibration match the Python design. Person detection and two-camera floor/source mapping are not implemented in this UI yet; the VJ output replaces the source camera by design.</p>
-      </div>
-    </div>
-  );
-}
-
-function LinkPanel({ state, bpmDraft, onBpmDraft, onSetTempo, onConfigure, onTransport }: {
-  state: LinkState;
-  bpmDraft: string;
-  onBpmDraft: (value: string) => void;
-  onSetTempo: () => void;
-  onConfigure: (patch: Partial<Pick<LinkState, "enabled" | "startStopSync" | "quantum">>) => void;
-  onTransport: (playing: boolean) => void;
-}) {
-  const phasePercent = state.quantum > 0 ? (state.phase / state.quantum) * 100 : 0;
-  return (
-    <div style={panelBody}>
-      <SectionTitle title="Ableton Link" />
-      <InfoGrid rows={[
-        ["Status", state.enabled ? "Connected" : "Off"],
-        ["Peers", String(state.peers)],
-        ["BPM", state.bpm.toFixed(2)],
-        ["Beat", state.beat.toFixed(3)],
-        ["Phase", `${state.phase.toFixed(3)} / ${state.quantum}`],
-        ["Transport", state.playing ? "Playing" : "Stopped"],
-      ]} />
-      <label style={checkRow}>
-        <input type="checkbox" checked={state.enabled} onChange={(e) => onConfigure({ enabled: e.currentTarget.checked })} />
-        <span>Enable Link session</span>
-      </label>
-      <label style={checkRow}>
-        <input type="checkbox" checked={state.startStopSync} onChange={(e) => onConfigure({ startStopSync: e.currentTarget.checked })} />
-        <span>Sync start / stop</span>
-      </label>
-      <div>
-        <div style={fieldLabel}>Quantum</div>
-        <input type="range" min={1} max={16} step={1} value={state.quantum} onChange={(e) => onConfigure({ quantum: Number(e.currentTarget.value) })} style={{ width: "100%", accentColor: ACCENT }} />
-      </div>
-      <div>
-        <div style={fieldLabel}>Phase</div>
-        <div style={{ height: 8, borderRadius: 999, background: "#0c111a", border: `1px solid ${BORDER}`, overflow: "hidden" }}>
-          <div style={{ width: `${Math.max(0, Math.min(100, phasePercent))}%`, height: "100%", background: ACCENT }} />
-        </div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6 }}>
-        <input
-          id="link-bpm-input"
-          value={bpmDraft}
-          onChange={(e) => onBpmDraft(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onSetTempo();
-          }}
-          style={inputStyle}
-        />
-        <button onClick={onSetTempo} style={{ ...buttonBase, background: SURFACE3, color: TEXT }}>
-          Set BPM
-        </button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <button onClick={() => onTransport(true)} style={{ ...buttonBase, background: state.playing ? OK : SURFACE3, borderColor: state.playing ? OK : BORDER, color: state.playing ? "#00150d" : TEXT }}>
-          Play
-        </button>
-        <button onClick={() => onTransport(false)} style={{ ...buttonBase, background: !state.playing ? ACCENT2 : SURFACE3, borderColor: !state.playing ? ACCENT2 : BORDER, color: !state.playing ? "#210008" : TEXT }}>
-          Stop
-        </button>
-      </div>
-      <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
-        <SectionTitle title="Renderer Sync" />
-        <p style={helpText}>GLSL uniforms: iLinkBpm, iLinkBeat, iLinkPhase, iLinkQuantum, iLinkPeers, iLinkEnabled, iLinkPlaying. p5 globals use linkBpm/linkBeat/linkPhase. Three.js receives link as the 4th update argument and state.link.</p>
       </div>
     </div>
   );
@@ -1057,24 +914,6 @@ const helpText: React.CSSProperties = {
   fontSize: 11,
   lineHeight: 1.5,
   margin: 0,
-};
-
-const fieldLabel: React.CSSProperties = {
-  fontSize: 10,
-  fontWeight: 900,
-  color: TEXT2,
-  textTransform: "uppercase",
-  letterSpacing: 0.8,
-  marginBottom: 4,
-};
-
-const checkRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  color: TEXT,
-  fontSize: 12,
-  fontWeight: 800,
 };
 
 function primaryButton(disabled: boolean): React.CSSProperties {

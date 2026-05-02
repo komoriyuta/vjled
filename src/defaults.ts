@@ -1,11 +1,10 @@
 import type { SceneType } from "./types";
 
 export const DEFAULT_SHADERTOY = `// Shadertoy compatible - use mainImage()
-// Ableton Link uniforms: iLinkBpm, iLinkBeat, iLinkPhase, iLinkQuantum, iLinkEnabled, iLinkPlaying
-// Audio uniforms: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iFft[32]
+// Audio uniforms: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord.xy / iResolution.xy;
-    float beat = iLinkEnabled ? iLinkBeat : iTime * 2.0;
+    float beat = iBeat > 0.5 ? 1.0 : fract(iTime * iBpm / 60.0);
     float pulse = exp(-fract(beat) * 4.0);
     vec3 col = 0.5 + 0.5 * cos(beat * 0.25 + uv.xyx + vec3(0.0, 2.0, 4.0));
     col += pulse * 0.3;
@@ -15,7 +14,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
 export const DEFAULT_THREEJS = `// setup() is called once. Return a state object.
 // update(state, time, dt, audio) is called every frame.
-// link: { bpm, beat, phase, quantum, peers, enabled, playing }
+// audio: { volume, bass, mid, treble, bpm, beat, beatPhase, beatCount, fft }
 function setup(scene, camera, renderer) {
     camera.position.z = 3;
     const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -26,7 +25,7 @@ function setup(scene, camera, renderer) {
 }
 
 function update(state, time, dt, audio) {
-    const beat = state.link && state.link.enabled ? state.link.beat : time * 2.0;
+    const beat = audio.bpm > 0 ? audio.beatPhase : time * 2.0;
     const pulse = 1.0 + 0.3 * Math.exp(-4.0 * (beat % 1.0));
     state.mesh.scale.set(pulse, pulse, pulse);
     state.mesh.rotation.x = beat * 0.25;
@@ -34,7 +33,6 @@ function update(state, time, dt, audio) {
 }`;
 
 export const DEFAULT_P5 = `// p5.js instance mode
-// Ableton Link globals: linkBpm, linkBeat, linkPhase, linkQuantum, linkEnabled, linkPlaying
 // Audio globals: audioVolume, audioBass, audioMid, audioTreble, bpm, beat, beatPhase, fft
 function setup() {
     createCanvas(windowWidth, windowHeight);
@@ -43,13 +41,13 @@ function setup() {
 
 function draw() {
     background(20);
-    var beat = linkEnabled ? linkBeat : millis() / 500;
-    var pulse = 1.0 + 0.3 * exp(-4.0 * (beat % 1.0));
+    var beatVal = bpm > 0 ? beatPhase : millis() / 500;
+    var pulse = 1.0 + 0.3 * exp(-4.0 * (beatVal % 1.0));
     var r = 80 * pulse;
     fill(255, 100 + audioBass * 155, 150, 200);
     ellipse(
-        width / 2 + sin(beat * 0.5) * 100,
-        height / 2 + cos(beat * 0.7) * 80,
+        width / 2 + sin(beatVal * 0.5) * 100,
+        height / 2 + cos(beatVal * 0.7) * 80,
         r + audioVolume * 60, r + audioVolume * 60
     );
 }`;

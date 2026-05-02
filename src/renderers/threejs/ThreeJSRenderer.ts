@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Renderer } from "../types";
-import type { AudioAnalysis, LinkState } from "../../types";
+import type { AudioAnalysis } from "../../types";
 
 export class ThreeJSRenderer implements Renderer {
   private renderer: THREE.WebGLRenderer | null = null;
@@ -11,7 +11,6 @@ export class ThreeJSRenderer implements Renderer {
   private _update: ((st: Record<string, unknown>, t: number, dt: number, audio: AudioAnalysis) => void) | null = null;
   private code = "";
   private initialized = false;
-  private linkState: LinkState | null = null;
 
   init(canvas: HTMLCanvasElement): void {
     this.renderer = new THREE.WebGLRenderer({
@@ -78,17 +77,12 @@ export class ThreeJSRenderer implements Renderer {
     }
   }
 
-  setLinkState(state: LinkState | null): void {
-    this.linkState = state;
-    this.state.link = state;
-  }
-
   update(time: number, dt: number, audio: AudioAnalysis): void {
     if (!this.renderer || !this.scene || !this.camera) return;
 
     if (this._update) {
       try {
-        this.state.link = this.linkState;
+        this.state.audio = audio;
         this._update(this.state, time, dt, audio);
       } catch (e) {
         console.error("Three.js update error:", e);

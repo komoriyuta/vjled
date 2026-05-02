@@ -1,6 +1,6 @@
 import p5 from "p5";
 import type { Renderer } from "../types";
-import type { AudioAnalysis, LinkState } from "../../types";
+import type { AudioAnalysis } from "../../types";
 import { emptyAudioAnalysis } from "../../stores/vjStore";
 
 const MATH_CONST = `
@@ -104,7 +104,6 @@ export class P5Renderer implements Renderer {
   private canvas: HTMLCanvasElement | null = null;
   private container: HTMLDivElement | null = null;
   private code = "";
-  private linkState: LinkState | null = null;
   private audio: AudioAnalysis = emptyAudioAnalysis;
 
   init(canvas: HTMLCanvasElement): void {
@@ -207,13 +206,6 @@ export class P5Renderer implements Renderer {
     lines.push("var keyCode = 0;");
     lines.push("var windowWidth = p.windowWidth;");
     lines.push("var windowHeight = p.windowHeight;");
-    lines.push("var linkBpm = 120;");
-    lines.push("var linkBeat = 0;");
-    lines.push("var linkPhase = 0;");
-    lines.push("var linkQuantum = 4;");
-    lines.push("var linkPeers = 0;");
-    lines.push("var linkEnabled = false;");
-    lines.push("var linkPlaying = true;");
     lines.push("var audio = p.__vjAudio;");
     lines.push("var audioVolume = 0;");
     lines.push("var audioBass = 0;");
@@ -240,14 +232,6 @@ var __syncP5Globals = function() {
   keyCode = p.keyCode;
   windowWidth = p.windowWidth;
   windowHeight = p.windowHeight;
-  var link = p.__vjledLink || {};
-  linkBpm = link.bpm || 120;
-  linkBeat = link.beat || 0;
-  linkPhase = link.phase || 0;
-  linkQuantum = link.quantum || 4;
-  linkPeers = link.peers || 0;
-  linkEnabled = !!link.enabled;
-  linkPlaying = link.playing !== false;
   audioVolume = audio.volume;
   audioBass = audio.bass;
   audioMid = audio.mid;
@@ -260,13 +244,6 @@ var __syncP5Globals = function() {
 };`);
 
     return lines.join("\n");
-  }
-
-  setLinkState(state: LinkState | null): void {
-    this.linkState = state;
-    if (this.p5Instance) {
-      (this.p5Instance as unknown as { __vjledLink?: LinkState | null }).__vjledLink = state;
-    }
   }
 
   private recreate(): void {
@@ -345,7 +322,6 @@ if (typeof mouseDragged === 'function') {
       };
 
       this.p5Instance = new p5(sketch, this.container);
-      this.setLinkState(this.linkState);
     } catch (e) {
       console.error("p5.js eval error:", e);
     }

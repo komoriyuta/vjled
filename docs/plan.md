@@ -11,8 +11,7 @@ LED制御はRustにフル移植予定。
 | 1 | 基本スキャフォールド (Tauri v2 + React + Vite + 2ウィンドウ) | **完了** |
 | 2 | レンダリングエンジン統合 (GLSL, p5.js, Three.js, Video) | **完了** |
 | 3 | VJコントロール (A/Bバス、クロスフェーダー、プレビュー、Monacoエディタ) | **完了** |
-| 4 | 音声解析統合 (Mic入力, FFT, BPM, beat同期) | **完了** |
-| 5 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
+| 4 | 音声解析統合 (Mic入力, FFT, BPM, beat同期) | **完了** || 5 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
 | 6 | AI統合 (コード生成, 映像生成) | 未着手 |
 
 ---
@@ -76,7 +75,7 @@ Renderer.update(time, dt, audio) → GLSL / p5 / Three.js / Video
 - Videoレンダラは `BPM LOOP` 有効時、`loopStart` から `beatsPerLoop` 拍ぶんをループ長として扱い、BPMビート境界で再同期する。
 - GLSL uniforms: `iAudioVolume`, `iAudioBass`, `iAudioMid`, `iAudioTreble`, `iBpm`, `iBeat`, `iBeatPhase`, `iBeatCount`, `iFft[32]`
 - p5 globals: `audioVolume`, `audioBass`, `audioMid`, `audioTreble`, `bpm`, `beat`, `beatPhase`, `beatCount`, `fft`
-- Three.js: `update(state, time, dt, audio)` の第4引数で同じ値を受け取る。
+- Three.js: `update(state, time, dt, audio)` の第4引数で同じ値を受け取る。`state.audio` でもアクセス可能。
 
 ---
 

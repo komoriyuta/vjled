@@ -3,9 +3,9 @@ import type { Scene } from "../types";
 import type { Renderer } from "../renderers/types";
 import { createRenderer } from "../renderers/index";
 import { Compositor } from "../renderers/compositor";
-import { emitVideoCmd, listenLinkState, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
+import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
 import { sendLedFrame } from "../led/pixelExtractor";
-import type { CalibrationPoint, LedConfig, LinkState } from "../types";
+import type { CalibrationPoint, LedConfig } from "../types";
 import { emptyAudioAnalysis } from "../stores/vjStore";
 
 interface UseEngineOptions {
@@ -57,7 +57,6 @@ export function useEngine(opts: UseEngineOptions) {
   const codeCacheRef = useRef<Map<string, string>>(new Map());
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
-  const linkStateRef = useRef<LinkState | null>(null);
   const lastBpmRef = useRef(120);
   const ledConfigRef = useRef(ledConfig);
   const ledPointsRef = useRef(ledPoints);
@@ -91,7 +90,6 @@ export function useEngine(opts: UseEngineOptions) {
       for (const cmd of controlCacheRef.current.get(scene.id) ?? []) {
         r.control?.(cmd.action, cmd.value);
       }
-      r.setLinkState?.(linkStateRef.current);
       return entry;
     },
     [W, H],
@@ -178,13 +176,6 @@ export function useEngine(opts: UseEngineOptions) {
       entry?.renderer.control?.(action, value);
     });
 
-    const unlistenLinkState = listenLinkState((state) => {
-      linkStateRef.current = state;
-      for (const [, entry] of renderersRef.current) {
-        entry.renderer.setLinkState?.(state);
-      }
-    });
-
     requestVJState();
 
     let running = true;
@@ -216,21 +207,18 @@ export function useEngine(opts: UseEngineOptions) {
         if (busA) {
           const entry = renderersRef.current.get(busA);
           if (entry) {
-            entry.renderer.setLinkState?.(linkStateRef.current);
             entry.renderer.update(time, dt, audio);
           }
         }
         if (busB) {
           const entry = renderersRef.current.get(busB);
           if (entry) {
-            entry.renderer.setLinkState?.(linkStateRef.current);
             entry.renderer.update(time, dt, audio);
           }
         }
         if (selectedSceneId && selectedSceneId !== busA && selectedSceneId !== busB) {
           const entry = renderersRef.current.get(selectedSceneId);
           if (entry) {
-            entry.renderer.setLinkState?.(linkStateRef.current);
             entry.renderer.update(time, dt, audio);
           }
         }
@@ -268,7 +256,6 @@ export function useEngine(opts: UseEngineOptions) {
       cancelAnimationFrame(rafRef.current);
       unlistenState.then((fn) => fn());
       unlistenVideoCmd.then((fn) => fn());
-      unlistenLinkState.then((fn) => fn());
       for (const [, e] of renderersRef.current) {
         e.renderer.destroy();
         e.canvas.remove();

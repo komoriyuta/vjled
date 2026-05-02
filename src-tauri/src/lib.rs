@@ -1,13 +1,11 @@
 mod ai;
 mod calibration;
 mod led;
-mod link;
 mod video_server;
 
 use calibration::{Calibrator, CalibrationConfig};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
 use led::layout::HardwareLayout;
-use link::{LinkController, LinkStatus};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -16,7 +14,6 @@ use tauri::State;
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
-    link: LinkController,
     video_server_port: u16,
 }
 
@@ -198,31 +195,6 @@ fn project_load(path: String) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn link_configure(
-    enabled: bool,
-    start_stop_sync: bool,
-    quantum: f64,
-    state: State<AppState>,
-) -> Result<LinkStatus, String> {
-    state.link.configure(enabled, start_stop_sync, quantum)
-}
-
-#[tauri::command]
-fn link_set_tempo(bpm: f64, state: State<AppState>) -> Result<LinkStatus, String> {
-    state.link.set_tempo(bpm)
-}
-
-#[tauri::command]
-fn link_set_playing(playing: bool, state: State<AppState>) -> Result<LinkStatus, String> {
-    state.link.set_playing(playing)
-}
-
-#[tauri::command]
-fn link_status(state: State<AppState>) -> Result<LinkStatus, String> {
-    state.link.status()
-}
-
-#[tauri::command]
 fn get_video_server_port(state: State<AppState>) -> u16 {
     state.video_server_port
 }
@@ -256,17 +228,12 @@ pub fn run() {
             calibration_detect_led,
             calibration_has_baseline,
             calibration_reset,
-            link_configure,
-            link_set_tempo,
-            link_set_playing,
-            link_status,
         ])
         .setup(|app| {
             let server = video_server::VideoFileServer::start();
             app.manage(AppState {
                 controller: Mutex::new(None),
                 calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
-                link: LinkController::spawn(app.handle().clone()),
                 video_server_port: server.port,
             });
             if let Some(output_window) = app.get_webview_window("output") {
