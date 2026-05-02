@@ -170,8 +170,15 @@ fn find_device_by_name(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
 }
 
 fn find_default_device(host: &cpal::Host) -> Option<cpal::Device> {
-    if let Some(input) = host.default_input_device() {
-        return Some(input);
+    let preferred = ["pipewire", "pulse"];
+    if let Ok(iter) = host.input_devices() {
+        for d in iter {
+            if let Ok(name) = d.name() {
+                if preferred.iter().any(|&p| name == p) {
+                    return Some(d);
+                }
+            }
+        }
     }
     if let Ok(mut iter) = host.input_devices() {
         if let Some(d) = iter.next() {
@@ -186,20 +193,22 @@ fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigR
 
     if let Ok(supported) = device.supported_input_configs() {
         configs.extend(supported.filter(|c| {
-            matches!(
-                c.sample_format(),
-                SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
-            )
+            c.min_sample_rate().0 >= 8000
+                && matches!(
+                    c.sample_format(),
+                    SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+                )
         }));
     }
 
     if configs.is_empty() {
         if let Ok(supported) = device.supported_output_configs() {
             configs.extend(supported.filter(|c| {
-                matches!(
-                    c.sample_format(),
-                    SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
-                )
+                c.min_sample_rate().0 >= 8000
+                    && matches!(
+                        c.sample_format(),
+                        SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+                    )
             }));
         }
     }
@@ -215,7 +224,19 @@ fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigR
             SampleFormat::I16 => 2,
             _ => 1,
         };
-        b_priority.cmp(&a_priority)
+        b_priority.cmp(&a_priority).then_with(|| {
+            let a_rate = if a.min_sample_rate().0 <= 48000 {
+                a.min_sample_rate().0
+            } else {
+                0
+            };
+            let b_rate = if b.min_sample_rate().0 <= 48000 {
+                b.min_sample_rate().0
+            } else {
+                0
+            };
+            b_rate.cmp(&a_rate)
+        })
     });
 
     configs.into_iter().next()
