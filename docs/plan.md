@@ -11,7 +11,8 @@ LED制御はRustにフル移植予定。
 | 1 | 基本スキャフォールド (Tauri v2 + React + Vite + 2ウィンドウ) | **完了** |
 | 2 | レンダリングエンジン統合 (GLSL, p5.js, Three.js, Video) | **完了** |
 | 3 | VJコントロール (A/Bバス、クロスフェーダー、プレビュー、Monacoエディタ) | **完了** |
-| 4 | 音声解析統合 (Mic入力, FFT, BPM, beat同期) | **完了** || 5 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
+| 4 | 音声解析統合 (Audio capture, FFT, BPM, beat同期) | **見直し中** |
+| 5 | LED統合 (Rust: カメラ→人物検出→UDP送信) | 未着手 |
 | 6 | AI統合 (コード生成, 映像生成) | 未着手 |
 
 ---
@@ -62,16 +63,19 @@ Bus B Scene → RendererB → offscreen canvas B ─┘
 
 ### 音声解析パイプライン
 ```
-Selected Mic → Web Audio AnalyserNode ─┬→ volume / bass / mid / treble
-                                       ├→ 32-band FFT
-                                       └→ bass transient beat detection → BPM / beatPhase
+Audio Capture → Rust analysis ─┬→ volume / bass / mid / treble
+                               ├→ 32-band FFT
+                               └→ rolling BeatGrid analysis → BPM / beatPhase
 
+Rust audio state → emit("audio-analysis") → Control Window Zustand audio state
 Control Window Zustand audio state → emit("vj-state") → Output Window
 Renderer.update(time, dt, audio) → GLSL / p5 / Three.js / Video
 ```
 
-- マイクは Control ウィンドウの Audio タブで選択する。
-- BPMは低域エネルギーのトランジェント間隔から推定し、70〜180 BPMへ正規化する。
+- Audioの詳細方針は `docs/audio.md` を参照。
+- マイクまたはOS別の内部音声キャプチャを Control ウィンドウの Audio タブで選択する。
+- BPMは低域だけに依存しない。rolling window上でBPMとBeatGridを推定し、70〜180 BPMへ正規化する。
+- `beat` はトランジェント検出そのものではなく、推定BeatGridの拍境界で発火する。
 - Videoレンダラは `BPM LOOP` 有効時、`loopStart` から `beatsPerLoop` 拍ぶんをループ長として扱い、BPMビート境界で再同期する。
 - GLSL uniforms: `iAudioVolume`, `iAudioBass`, `iAudioMid`, `iAudioTreble`, `iBpm`, `iBeat`, `iBeatPhase`, `iBeatCount`, `iFft[32]`
 - p5 globals: `audioVolume`, `audioBass`, `audioMid`, `audioTreble`, `bpm`, `beat`, `beatPhase`, `beatCount`, `fft`
@@ -88,7 +92,7 @@ Renderer.update(time, dt, audio) → GLSL / p5 / Three.js / Video
 | `types/index.ts` | `Scene`, `SceneType`, `BusLabel`, `VJState` 型定義 |
 | `defaults.ts` | タイプ別デフォルトコード (Shadertoy GLSL, Three.js, p5.js) |
 | `stores/vjStore.ts` | Zustandグローバル状態: シーンCRUD, A/Bバス, クロスフェーダー, フェードアニメーション |
-| `hooks/useAudioAnalysis.ts` | Web Audio APIによるマイク選択、FFT、BPM/beat解析 |
+| `hooks/useAudioAnalysis.ts` | Rust音声解析イベントの購読、audio state反映 |
 | `hooks/useEngine.ts` | レンダリングエンジンフック: レンダラ生成/破棄, コンポジタ, アニメーションループ |
 | `renderers/types.ts` | `Renderer` インターフェース: `init`, `setCode`, `update`, `resize`, `destroy` |
 | `renderers/glsl/GLSLRenderer.ts` | GLSL/Shadertoyレンダラ (mainImage自動ラップ, iTime/iResolution/iFrame対応) |
@@ -349,7 +353,19 @@ vjled/
 
 ---
 
-## 次のステップ (Phase 4: LED統合)
+## 次のステップ
+
+### Phase 4: Audio同期見直し
+
+Rust側で実装予定:
+- capture / meter-FFT / beat tracking / Tauri event の責務分離
+- rolling mono ring buffer と解析ワーカー追加
+- permissive licenseのRust解析ライブラリによるBPM + BeatGrid推定
+- BeatGridをmonotonic clock上のepochに変換して低遅延の `beatPhase` を出力
+- Linux / Windows / macOS の内部音声キャプチャ方針を実装に反映
+- GPL/LGPL依存が混入していないことの確認
+
+### Phase 5: LED統合
 
 Rust側で実装予定:
 - `src-tauri/src/led/protocol.rs`: NeoPixel UDPパケットビルダ

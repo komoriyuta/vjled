@@ -32,17 +32,11 @@ export const emptyAudioAnalysis: AudioAnalysis = {
   permission: "idle",
   deviceId: "",
   deviceLabel: "",
-  volume: 0,
-  bass: 0,
-  mid: 0,
-  treble: 0,
   fft: Array.from({ length: 32 }, () => 0),
   bpm: 0,
   beat: false,
   beatPhase: 0,
-  beatConfidence: 0,
   beatCount: 0,
-  lastBeatAt: 0,
 };
 
 export const useVJStore = create<VJStore>((set, get) => ({

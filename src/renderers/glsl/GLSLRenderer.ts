@@ -12,10 +12,6 @@ uniform float iTime;
 uniform vec2  iResolution;
 uniform vec4  iMouse;
 uniform int   iFrame;
-uniform float iAudioVolume;
-uniform float iAudioBass;
-uniform float iAudioMid;
-uniform float iAudioTreble;
 uniform float iBpm;
 uniform float iBeat;
 uniform float iBeatPhase;
@@ -108,7 +104,7 @@ export class GLSLRenderer implements Renderer {
 
     this.program = prog;
     this.uLocs = {};
-    for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iAudioVolume", "iAudioBass", "iAudioMid", "iAudioTreble", "iBpm", "iBeat", "iBeatPhase", "iBeatCount", "iFft"]) {
+    for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iBpm", "iBeat", "iBeatPhase", "iBeatCount", "iFft"]) {
       this.uLocs[name] = gl.getUniformLocation(prog, name);
     }
   }
@@ -137,10 +133,6 @@ export class GLSLRenderer implements Renderer {
     if (this.uLocs.iTime != null) gl.uniform1f(this.uLocs.iTime, time);
     if (this.uLocs.iResolution != null) gl.uniform2f(this.uLocs.iResolution, c.width, c.height);
     if (this.uLocs.iFrame != null) gl.uniform1i(this.uLocs.iFrame, this.frame);
-    if (this.uLocs.iAudioVolume != null) gl.uniform1f(this.uLocs.iAudioVolume, audio.volume);
-    if (this.uLocs.iAudioBass != null) gl.uniform1f(this.uLocs.iAudioBass, audio.bass);
-    if (this.uLocs.iAudioMid != null) gl.uniform1f(this.uLocs.iAudioMid, audio.mid);
-    if (this.uLocs.iAudioTreble != null) gl.uniform1f(this.uLocs.iAudioTreble, audio.treble);
     if (this.uLocs.iBpm != null) gl.uniform1f(this.uLocs.iBpm, audio.bpm);
     if (this.uLocs.iBeat != null) gl.uniform1f(this.uLocs.iBeat, audio.beat ? 1 : 0);
     if (this.uLocs.iBeatPhase != null) gl.uniform1f(this.uLocs.iBeatPhase, audio.beatPhase);

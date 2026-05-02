@@ -37,17 +37,11 @@ export interface AudioAnalysis {
   permission: AudioPermissionState;
   deviceId: string;
   deviceLabel: string;
-  volume: number;
-  bass: number;
-  mid: number;
-  treble: number;
   fft: number[];
   bpm: number;
   beat: boolean;
   beatPhase: number;
-  beatConfidence: number;
   beatCount: number;
-  lastBeatAt: number;
 }
 
 export interface DeviceInfo {

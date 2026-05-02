@@ -1,14 +1,15 @@
 import type { SceneType } from "./types";
 
 export const DEFAULT_SHADERTOY = `// Shadertoy compatible - use mainImage()
-// Audio uniforms: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]
+// Audio uniforms: iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord.xy / iResolution.xy;
     vec3 col = 0.5 + 0.5 * cos(iTime * 0.3 + uv.xyx + vec3(0.0, 2.0, 4.0));
     if (iBpm > 0.0) {
         float pulse = exp(-iBeatPhase * 4.0) + iBeat;
         col += pulse * 0.3;
-        col += vec3(iAudioBass, iAudioMid, iAudioTreble) * 0.4;
+        float bass = iFft[0] + iFft[1] + iFft[2];
+        col += vec3(bass * 0.1);
     }
     fragColor = vec4(col, 1.0);
 }`;
@@ -33,7 +34,7 @@ function update(state, time, dt, audio) {
 }`;
 
 export const DEFAULT_P5 = `// p5.js instance mode
-// Audio globals: audioVolume, audioBass, audioMid, audioTreble, bpm, beat, beatPhase, fft
+// Audio globals: bpm, beat, beatPhase, beatCount, fft
 function setup() {
     createCanvas(windowWidth, windowHeight);
     noStroke();
@@ -46,11 +47,12 @@ function draw() {
         var pulse = 1.0 + 0.3 * exp(-beatPhase * 4.0) + (beat ? 0.2 : 0);
         r = 80 * pulse;
     }
-    fill(255, 100 + audioBass * 155, 150, 200);
+    var bass = (fft[0] + fft[1] + fft[2]) / 3;
+    fill(255, 100 + bass * 155, 150, 200);
     ellipse(
         width / 2 + sin(millis() / 1000 * 0.5) * 100,
         height / 2 + cos(millis() / 1000 * 0.7) * 80,
-        r + audioVolume * 60, r + audioVolume * 60
+        r + bass * 60, r + bass * 60
     );
 }`;
 

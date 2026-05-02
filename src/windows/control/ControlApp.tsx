@@ -1,11 +1,16 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";import { useVJStore } from "../../stores/vjStore";
+import { invoke } from "@tauri-apps/api/core";
+import { useVJStore } from "../../stores/vjStore";
 import { useLedStore } from "../../stores/ledStore";
 import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
-import { useAudioAnalysis, listAudioDevices } from "../../hooks/useAudioAnalysis";
+import {
+  useAudioAnalysis,
+  listAudioDevices,
+  type RustAudioDevice,
+} from "../../hooks/useAudioAnalysis";
 import type { AudioAnalysis, Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
@@ -424,7 +429,7 @@ export default function ControlApp() {
             <AudioPanel
               audio={audio}
               onToggle={setAudioEnabled}
-              onDevice={(id) => setAudioDevice(id)}
+              onDevice={(id, label) => setAudioDevice(id, label)}
             />
           )}
           {rightTab === "ai" && (
@@ -583,9 +588,9 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
 function AudioPanel({ audio, onToggle, onDevice }: {
   audio: AudioAnalysis;
   onToggle: (enabled: boolean) => void;
-  onDevice: (deviceId: string) => void;
+  onDevice: (deviceId: string, label?: string) => void;
 }) {
-  const [devices, setDevices] = useState<{ name: string; is_input: boolean; is_output: boolean }[]>([]);
+  const [devices, setDevices] = useState<RustAudioDevice[]>([]);
 
   useEffect(() => {
     listAudioDevices()
@@ -596,16 +601,25 @@ function AudioPanel({ audio, onToggle, onDevice }: {
   return (
     <div style={panelBody}>
       <SectionTitle title="Audio Analysis" />
-      <p style={helpText}>Native audio capture via cpal. Select any input or output device including system audio monitors.</p>
+      <p style={helpText}>Native audio capture via cpal. Use a loopback input such as PipeWire monitor, BlackHole, Soundflower, or WASAPI loopback for system audio.</p>
       <button onClick={() => onToggle(!audio.enabled)} style={{ ...buttonBase, width: "100%", background: audio.enabled ? ACCENT : SURFACE3, borderColor: audio.enabled ? ACCENT : BORDER, color: audio.enabled ? "#001018" : TEXT }}>
         {audio.enabled ? "Stop Audio" : "Start Audio"}
       </button>
       <label>
         <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Audio Device</div>
-        <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
-          <option value="">Default output (loopback)</option>
-          {devices.map((d, i) => (
-            <option key={i} value={d.name}>{d.name} {d.is_input ? "[In]" : ""}{d.is_output ? "[Out]" : ""}</option>
+        <select
+          value={audio.deviceId}
+          onChange={(e) => {
+            const device = devices.find((d) => d.id === e.target.value);
+            onDevice(e.target.value, device?.name);
+          }}
+          style={inputStyle}
+        >
+          <option value="">Auto (loopback, then input)</option>
+          {devices.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name} {d.is_loopback ? "[Loopback]" : d.is_input ? "[In]" : d.is_output ? "[Out]" : ""}
+            </option>
           ))}
         </select>
       </label>
@@ -615,12 +629,8 @@ function AudioPanel({ audio, onToggle, onDevice }: {
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
         ["Phase", `${(audio.beatPhase * 100).toFixed(0)}%`],
-        ["Confidence", `${(audio.beatConfidence * 100).toFixed(0)}%`],
+        ["Count", `${audio.beatCount}`],
       ]} />
-      <Meter label="Volume" value={audio.volume} color={ACCENT} />
-      <Meter label="Bass" value={audio.bass} color={OK} />
-      <Meter label="Mid" value={audio.mid} color="#facc15" />
-      <Meter label="Treble" value={audio.treble} color={ACCENT2} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(16, 1fr)", gap: 2, alignItems: "end", height: 56, padding: 8, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
         {audio.fft.slice(0, 32).map((v, i) => (
           <div key={i} style={{ height: `${Math.max(3, v * 48)}px`, background: i < 6 ? OK : i < 18 ? ACCENT : ACCENT2, borderRadius: 3 }} />
@@ -628,21 +638,7 @@ function AudioPanel({ audio, onToggle, onDevice }: {
       </div>
       <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
         <SectionTitle title="Renderer Variables" />
-        <p style={helpText}>GLSL: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]. p5/Three receive matching audio fields.</p>
-      </div>
-    </div>
-  );
-}
-
-function Meter({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", color: TEXT2, fontSize: 10, fontWeight: 900, textTransform: "uppercase", marginBottom: 4 }}>
-        <span>{label}</span>
-        <span>{(value * 100).toFixed(0)}%</span>
-      </div>
-      <div style={{ height: 8, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%`, height: "100%", background: color }} />
+        <p style={helpText}>GLSL: iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]. p5/Three receive: bpm, beat, beatPhase, beatCount, fft.</p>
       </div>
     </div>
   );
