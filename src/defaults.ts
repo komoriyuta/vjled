@@ -4,11 +4,12 @@ export const DEFAULT_SHADERTOY = `// Shadertoy compatible - use mainImage()
 // Audio uniforms: iAudioVolume, iAudioBass, iAudioMid, iAudioTreble, iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord.xy / iResolution.xy;
-    float beat = iBeat > 0.5 ? 1.0 : fract(iTime * iBpm / 60.0);
-    float pulse = exp(-fract(beat) * 4.0);
-    vec3 col = 0.5 + 0.5 * cos(beat * 0.25 + uv.xyx + vec3(0.0, 2.0, 4.0));
-    col += pulse * 0.3;
-    col += vec3(iAudioBass, iAudioMid, iAudioTreble) * 0.4;
+    vec3 col = 0.5 + 0.5 * cos(iTime * 0.3 + uv.xyx + vec3(0.0, 2.0, 4.0));
+    if (iBpm > 0.0) {
+        float pulse = exp(-iBeatPhase * 4.0) + iBeat;
+        col += pulse * 0.3;
+        col += vec3(iAudioBass, iAudioMid, iAudioTreble) * 0.4;
+    }
     fragColor = vec4(col, 1.0);
 }`;
 
@@ -25,11 +26,10 @@ function setup(scene, camera, renderer) {
 }
 
 function update(state, time, dt, audio) {
-    const beat = audio.bpm > 0 ? audio.beatPhase : time * 2.0;
-    const pulse = 1.0 + 0.3 * Math.exp(-4.0 * (beat % 1.0));
-    state.mesh.scale.set(pulse, pulse, pulse);
-    state.mesh.rotation.x = beat * 0.25;
-    state.mesh.rotation.y = beat * 0.35;
+    state.mesh.rotation.x = time * 0.25;
+    state.mesh.rotation.y = time * 0.35;
+    const scale = 1.0 + (audio.bpm > 0 ? 0.3 * Math.exp(-audio.beatPhase * 4.0) + (audio.beat ? 0.2 : 0) : 0);
+    state.mesh.scale.set(scale, scale, scale);
 }`;
 
 export const DEFAULT_P5 = `// p5.js instance mode
@@ -41,13 +41,15 @@ function setup() {
 
 function draw() {
     background(20);
-    var beatVal = bpm > 0 ? beatPhase : millis() / 500;
-    var pulse = 1.0 + 0.3 * exp(-4.0 * (beatVal % 1.0));
-    var r = 80 * pulse;
+    var r = 80;
+    if (bpm > 0) {
+        var pulse = 1.0 + 0.3 * exp(-beatPhase * 4.0) + (beat ? 0.2 : 0);
+        r = 80 * pulse;
+    }
     fill(255, 100 + audioBass * 155, 150, 200);
     ellipse(
-        width / 2 + sin(beatVal * 0.5) * 100,
-        height / 2 + cos(beatVal * 0.7) * 80,
+        width / 2 + sin(millis() / 1000 * 0.5) * 100,
+        height / 2 + cos(millis() / 1000 * 0.7) * 80,
         r + audioVolume * 60, r + audioVolume * 60
     );
 }`;

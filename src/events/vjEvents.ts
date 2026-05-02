@@ -8,7 +8,6 @@ export interface VJStatePayload {
   crossfade: number;
   isPlaying: boolean;
   selectedSceneId: string | null;
-  bpm: number;
   audio: AudioAnalysis;
 }
 

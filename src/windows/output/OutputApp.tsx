@@ -1,7 +1,6 @@
 import { useRef } from "react";
 import { useEngine } from "../../hooks/useEngine";
 import { useLedStore } from "../../stores/ledStore";
-import { useVJStore } from "../../stores/vjStore";
 
 export default function OutputApp() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -13,7 +12,6 @@ export default function OutputApp() {
     preview: false,
     ledConfig,
     ledPoints,
-    getBpm: () => useVJStore.getState().bpm,
   });
 
   return (

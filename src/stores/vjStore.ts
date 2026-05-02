@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, VJState } from "../types";
+import type { AudioAnalysis, AudioInputDevice, AudioSource, Scene, SceneType, VJState } from "../types";
 import { getDefaultCode } from "../defaults";
 
 interface VJStore extends VJState {
@@ -20,9 +20,9 @@ interface VJStore extends VJState {
   setAudioDevices: (devices: AudioInputDevice[]) => void;
   setAudioDevice: (deviceId: string, label?: string) => void;
   setAudioEnabled: (enabled: boolean) => void;
+  setAudioSource: (source: AudioSource) => void;
   setAudioAnalysis: (audio: Partial<AudioAnalysis>) => void;
   loadProject: (data: VJState) => void;
-  setBpm: (bpm: number) => void;
   setVideoSync: (sceneId: string, sync: import("../types").VideoSync) => void;
 }
 
@@ -31,6 +31,7 @@ let _nextId = 1;
 export const emptyAudioAnalysis: AudioAnalysis = {
   enabled: false,
   permission: "idle",
+  source: "mic",
   deviceId: "",
   deviceLabel: "",
   volume: 0,
@@ -53,7 +54,6 @@ export const useVJStore = create<VJStore>((set, get) => ({
   crossfade: 0,
   isPlaying: true,
   selectedSceneId: null,
-  bpm: 120,
   audio: emptyAudioAnalysis,
   audioDevices: [],
 
@@ -131,7 +131,6 @@ export const useVJStore = create<VJStore>((set, get) => ({
 
   setPlaying: (p) => set({ isPlaying: p }),
   selectScene: (id) => set({ selectedSceneId: id }),
-  setBpm: (bpm) => set({ bpm: Math.max(1, Math.min(300, bpm)) }),
   setVideoSync: (sceneId, sync) =>
     set((s) => ({
       scenes: s.scenes.map((sc) => (sc.id === sceneId ? { ...sc, videoSync: sync } : sc)),
@@ -151,6 +150,16 @@ export const useVJStore = create<VJStore>((set, get) => ({
         ...s.audio,
         enabled,
         permission: enabled ? s.audio.permission : "idle",
+        beat: false,
+      },
+    })),
+  setAudioSource: (source) =>
+    set((s) => ({
+      audio: {
+        ...s.audio,
+        source,
+        enabled: false,
+        permission: "idle",
         beat: false,
       },
     })),
@@ -175,7 +184,6 @@ export const useVJStore = create<VJStore>((set, get) => ({
       crossfade: data.crossfade,
       isPlaying: data.isPlaying,
       selectedSceneId: data.selectedSceneId,
-      bpm: data.bpm ?? 120,
       audio: {
         ...emptyAudioAnalysis,
         ...(data.audio ?? {}),

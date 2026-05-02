@@ -16,7 +16,6 @@ interface UseEngineOptions {
   selectedPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   ledConfig?: LedConfig | null;
   ledPoints?: CalibrationPoint[];
-  getBpm?: () => number;
 }
 
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
@@ -36,7 +35,7 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints, getBpm } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
 
   const renderersRef = useRef<Map<string, { renderer: Renderer; canvas: HTMLCanvasElement }>>(new Map());
   const compositorRef = useRef<Compositor | null>(null);
@@ -48,7 +47,6 @@ export function useEngine(opts: UseEngineOptions) {
     crossfade: 0,
     isPlaying: true,
     selectedSceneId: null,
-    bpm: 120,
     audio: emptyAudioAnalysis,
   });
   const rafRef = useRef(0);
@@ -162,7 +160,7 @@ export function useEngine(opts: UseEngineOptions) {
           entry.renderer.control?.("syncSettings", {
             enabled: scene.videoSync.enabled,
             measuresPerLoop: scene.videoSync.measuresPerLoop,
-            bpm: getBpm?.() ?? 120,
+            bpm: stateRef.current.audio.bpm || 120,
           });
         }
       }
@@ -187,7 +185,7 @@ export function useEngine(opts: UseEngineOptions) {
       const dt = time - prevRef.current;
       prevRef.current = time;
 
-      const currentBpm = getBpm?.() ?? 120;
+      const currentBpm = audio.bpm || 120;
       if (currentBpm !== lastBpmRef.current) {
         lastBpmRef.current = currentBpm;
         const lookup = new Map(scenes.map((s) => [s.id, s]));

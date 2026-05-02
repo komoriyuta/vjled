@@ -32,6 +32,7 @@ function bandAverage(data: Uint8Array, start: number, end: number): number {
 
 export function useAudioAnalysis(): void {
   const enabled = useVJStore((s) => s.audio.enabled);
+  const source = useVJStore((s) => s.audio.source);
   const deviceId = useVJStore((s) => s.audio.deviceId);
 
   const rafRef = useRef(0);
@@ -93,14 +94,41 @@ export function useAudioAnalysis(): void {
       confidenceRef.current = 0;
     }
 
+    async function startMic() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+      return stream;
+    }
+
+    async function startSystem() {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+      });
+      const audioTracks = displayStream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        displayStream.getVideoTracks().forEach((t) => t.stop());
+        throw new Error("No system audio available. Share a tab/screen with audio.");
+      }
+      displayStream.getVideoTracks().forEach((t) => t.stop());
+      const audioStream = new MediaStream(audioTracks);
+      return audioStream;
+    }
+
     async function startAudio() {
       if (!enabled) {
         stopAudio();
-        useVJStore.getState().setAudioAnalysis({ ...emptyAudioAnalysis, deviceId, enabled: false });
+        useVJStore.getState().setAudioAnalysis({ ...emptyAudioAnalysis, source, deviceId, enabled: false });
         return;
       }
 
-      if (!navigator.mediaDevices?.getUserMedia) {
+      if (!navigator.mediaDevices) {
         useVJStore.getState().setAudioAnalysis({ permission: "error", enabled: false });
         return;
       }
@@ -108,14 +136,7 @@ export function useAudioAnalysis(): void {
       useVJStore.getState().setAudioAnalysis({ permission: "requesting", enabled: true });
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: deviceId ? { exact: deviceId } : undefined,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          },
-        });
+        const stream = source === "system" ? await startSystem() : await startMic();
         if (stopped) {
           stream.getTracks().forEach((track) => track.stop());
           return;
@@ -124,14 +145,14 @@ export function useAudioAnalysis(): void {
         stopAudio();
         streamRef.current = stream;
         const context = new AudioContext();
-        const source = context.createMediaStreamSource(stream);
+        const src = context.createMediaStreamSource(stream);
         const analyser = context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0.72;
-        source.connect(analyser);
+        src.connect(analyser);
 
         contextRef.current = context;
-        sourceRef.current = source;
+        sourceRef.current = src;
         analyserRef.current = analyser;
 
         const track = stream.getAudioTracks()[0];
@@ -218,5 +239,5 @@ export function useAudioAnalysis(): void {
       stopped = true;
       stopAudio();
     };
-  }, [enabled, deviceId]);
+  }, [enabled, source, deviceId]);
 }

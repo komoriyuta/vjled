@@ -22,7 +22,6 @@ export interface VJState {
   crossfade: number;
   isPlaying: boolean;
   selectedSceneId: string | null;
-  bpm: number;
   audio: AudioAnalysis;
 }
 
@@ -33,9 +32,12 @@ export interface AudioInputDevice {
 
 export type AudioPermissionState = "idle" | "requesting" | "ready" | "denied" | "error";
 
+export type AudioSource = "mic" | "system";
+
 export interface AudioAnalysis {
   enabled: boolean;
   permission: AudioPermissionState;
+  source: AudioSource;
   deviceId: string;
   deviceLabel: string;
   volume: number;

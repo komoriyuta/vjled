@@ -42,11 +42,11 @@ function formatTime(s: number): string {
 export default function ControlApp() {
   const {
     scenes, busA, busB, crossfade, isPlaying,
-    selectedSceneId, bpm,
+    selectedSceneId,
     addScene, removeScene, updateSceneCode,
     setBusA, setBusB, setCrossfade,
     cutToA, cutToB, fadeToA, fadeToB,
-    setPlaying, selectScene, setBpm, setVideoSync,
+    setPlaying, selectScene, setVideoSync,
   } = useVJStore();
   useAudioAnalysis();
 
@@ -55,6 +55,7 @@ export default function ControlApp() {
   const audioDevices = useVJStore((s) => s.audioDevices);
   const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
   const setAudioDevice = useVJStore((s) => s.setAudioDevice);
+  const setAudioSource = useVJStore((s) => s.setAudioSource);
   const ledLoadProject = useLedStore((s) => s.loadProject);
   const ledConfig = useLedStore((s) => s.config);
   const ledPoints = useLedStore((s) => s.calibrationPoints);
@@ -80,7 +81,6 @@ export default function ControlApp() {
     busAPreviewRef: busACanvasRef,
     busBPreviewRef: busBCanvasRef,
     selectedPreviewRef: selectedCanvasRef,
-    getBpm: () => useVJStore.getState().bpm,
   });
 
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
@@ -229,7 +229,6 @@ export default function ControlApp() {
         crossfade: state.crossfade,
         isPlaying: state.isPlaying,
         selectedSceneId: state.selectedSceneId,
-        bpm: state.bpm,
         audio: state.audio,
       });
     };
@@ -343,7 +342,7 @@ export default function ControlApp() {
         </section>
 
         <section style={{ padding: "0 12px 10px" }}>
-          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 12, alignItems: "center" }}>
+          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center" }}>
             <div style={{ display: "flex", gap: 6 }}>
               <VJButton onClick={cutToA}>CUT A</VJButton>
               <VJButton onClick={fadeToA}>FADE A</VJButton>
@@ -361,10 +360,6 @@ export default function ControlApp() {
               <VJButton onClick={cutToB}>CUT B</VJButton>
               <VJButton onClick={() => setPlaying(!isPlaying)} accent={isPlaying}>{isPlaying ? "PAUSE" : "PLAY"}</VJButton>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, background: SURFACE2, padding: "6px 10px", borderRadius: 8, border: `1px solid ${BORDER}` }}>
-              <span style={{ color: TEXT2, fontSize: 10, fontWeight: 900, letterSpacing: 1 }}>BPM</span>
-              <input type="number" min={1} max={300} value={bpm} onChange={(e) => setBpm(parseFloat(e.target.value) || 120)} style={{ width: 52, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 6, color: TEXT, padding: "4px 6px", fontSize: 13, fontWeight: 800, textAlign: "center", fontVariantNumeric: "tabular-nums" }} />
-            </div>
           </div>
         </section>
 
@@ -376,7 +371,7 @@ export default function ControlApp() {
           <div style={{ flex: 1, borderRadius: 12, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
             {selectedScene ? (
               selectedScene.type === "video" ? (
-                <VideoEditor scene={selectedScene} audio={audio} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} bpm={bpm} onSyncChange={(sync) => setVideoSync(selectedScene.id, sync)} />
+                <VideoEditor scene={selectedScene} audio={audio} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} onSyncChange={(sync) => setVideoSync(selectedScene.id, sync)} />
               ) : (
                 <Editor
                   height="100%"
@@ -436,6 +431,7 @@ export default function ControlApp() {
                 const device = audioDevices.find((d) => d.deviceId === id);
                 setAudioDevice(id, device?.label);
               }}
+              onSource={setAudioSource}
             />
           )}
           {rightTab === "ai" && (
@@ -591,31 +587,43 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
   );
 }
 
-function AudioPanel({ audio, devices, onToggle, onDevice }: {
+function AudioPanel({ audio, devices, onToggle, onDevice, onSource }: {
   audio: AudioAnalysis;
   devices: AudioInputDevice[];
   onToggle: (enabled: boolean) => void;
   onDevice: (deviceId: string) => void;
+  onSource: (source: import("../../types").AudioSource) => void;
 }) {
   return (
     <div style={panelBody}>
       <SectionTitle title="Audio Analysis" />
-      <p style={helpText}>Mic input drives FFT bands, volume, bass/mid/treble, beat detection, BPM, renderer variables, and BPM-synced video loop timing.</p>
+      <p style={helpText}>Capture audio from microphone or system output. FFT bands, volume, beat detection, and BPM drive all renderer variables.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <button onClick={() => onSource("mic")} style={{ ...buttonBase, background: audio.source === "mic" ? ACCENT : SURFACE3, borderColor: audio.source === "mic" ? ACCENT : BORDER, color: audio.source === "mic" ? "#001018" : TEXT2 }}>
+          Microphone
+        </button>
+        <button onClick={() => onSource("system")} style={{ ...buttonBase, background: audio.source === "system" ? ACCENT : SURFACE3, borderColor: audio.source === "system" ? ACCENT : BORDER, color: audio.source === "system" ? "#001018" : TEXT2 }}>
+          System Audio
+        </button>
+      </div>
       <button onClick={() => onToggle(!audio.enabled)} style={{ ...buttonBase, width: "100%", background: audio.enabled ? ACCENT : SURFACE3, borderColor: audio.enabled ? ACCENT : BORDER, color: audio.enabled ? "#001018" : TEXT }}>
-        {audio.enabled ? "Stop Mic" : "Start Mic"}
+        {audio.enabled ? "Stop Audio" : "Start Audio"}
       </button>
-      <label>
-        <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Input Device</div>
-        <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
-          <option value="">Default microphone</option>
-          {devices.map((device) => (
-            <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
-          ))}
-        </select>
-      </label>
+      {audio.source === "mic" && (
+        <label>
+          <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Input Device</div>
+          <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
+            <option value="">Default microphone</option>
+            {devices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
       <InfoGrid rows={[
+        ["Source", audio.source === "system" ? "System" : "Mic"],
         ["Status", audio.permission],
-        ["Device", audio.deviceLabel || devices.find((d) => d.deviceId === audio.deviceId)?.label || "Default"],
+        ["Device", audio.source === "system" ? "System Audio" : (audio.deviceLabel || devices.find((d) => d.deviceId === audio.deviceId)?.label || "Default")],
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
         ["Phase", `${(audio.beatPhase * 100).toFixed(0)}%`],
@@ -710,13 +718,12 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   );
 }
 
-function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo, bpm, onSyncChange }: {
+function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo, onSyncChange }: {
   scene: Scene;
   audio: AudioAnalysis;
   onPick: () => void;
   sendCommand: (id: string, action: string, value: unknown) => void;
   getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number; bpmLoop: boolean; beatsPerLoop: number } | null;
-  bpm: number;
   onSyncChange: (sync: import("../../types").VideoSync) => void;
 }) {
   const [playing, setPlaying] = useState(false);
@@ -726,6 +733,7 @@ function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo, bpm, onS
   const [loopStart, setLoopStart] = useState(0);
   const [loopEnd, setLoopEnd] = useState(0);
   const sync = scene.videoSync ?? { enabled: false, measuresPerLoop: 1 };
+  const bpm = audio.bpm;
   const loopDuration = sync.enabled && bpm > 0 ? sync.measuresPerLoop * 240 / bpm : 0;
   const [bpmLoop, setBpmLoop] = useState(false);
   const [beatsPerLoop, setBeatsPerLoop] = useState(4);
