@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AudioAnalysis, AudioInputDevice, AudioSource, Scene, SceneType, VJState } from "../types";
+import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, VJState } from "../types";
 import { getDefaultCode } from "../defaults";
 
 interface VJStore extends VJState {
@@ -20,7 +20,6 @@ interface VJStore extends VJState {
   setAudioDevices: (devices: AudioInputDevice[]) => void;
   setAudioDevice: (deviceId: string, label?: string) => void;
   setAudioEnabled: (enabled: boolean) => void;
-  setAudioSource: (source: AudioSource) => void;
   setAudioAnalysis: (audio: Partial<AudioAnalysis>) => void;
   loadProject: (data: VJState) => void;
   setVideoSync: (sceneId: string, sync: import("../types").VideoSync) => void;
@@ -31,7 +30,6 @@ let _nextId = 1;
 export const emptyAudioAnalysis: AudioAnalysis = {
   enabled: false,
   permission: "idle",
-  source: "mic",
   deviceId: "",
   deviceLabel: "",
   volume: 0,
@@ -150,16 +148,6 @@ export const useVJStore = create<VJStore>((set, get) => ({
         ...s.audio,
         enabled,
         permission: enabled ? s.audio.permission : "idle",
-        beat: false,
-      },
-    })),
-  setAudioSource: (source) =>
-    set((s) => ({
-      audio: {
-        ...s.audio,
-        source,
-        enabled: false,
-        permission: "idle",
         beat: false,
       },
     })),

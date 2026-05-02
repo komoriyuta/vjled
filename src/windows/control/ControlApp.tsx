@@ -5,8 +5,8 @@ import { invoke } from "@tauri-apps/api/core";import { useVJStore } from "../../
 import { useLedStore } from "../../stores/ledStore";
 import { useAiStore } from "../../stores/aiStore";
 import { useEngine } from "../../hooks/useEngine";
-import { useAudioAnalysis } from "../../hooks/useAudioAnalysis";
-import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, BusLabel } from "../../types";
+import { useAudioAnalysis, listAudioDevices } from "../../hooks/useAudioAnalysis";
+import type { AudioAnalysis, Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
@@ -52,10 +52,8 @@ export default function ControlApp() {
 
   const loadProject = useVJStore((s) => s.loadProject);
   const audio = useVJStore((s) => s.audio);
-  const audioDevices = useVJStore((s) => s.audioDevices);
   const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
   const setAudioDevice = useVJStore((s) => s.setAudioDevice);
-  const setAudioSource = useVJStore((s) => s.setAudioSource);
   const ledLoadProject = useLedStore((s) => s.loadProject);
   const ledConfig = useLedStore((s) => s.config);
   const ledPoints = useLedStore((s) => s.calibrationPoints);
@@ -425,13 +423,8 @@ export default function ControlApp() {
           {rightTab === "audio" && (
             <AudioPanel
               audio={audio}
-              devices={audioDevices}
               onToggle={setAudioEnabled}
-              onDevice={(id) => {
-                const device = audioDevices.find((d) => d.deviceId === id);
-                setAudioDevice(id, device?.label);
-              }}
-              onSource={setAudioSource}
+              onDevice={(id) => setAudioDevice(id)}
             />
           )}
           {rightTab === "ai" && (
@@ -587,43 +580,38 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
   );
 }
 
-function AudioPanel({ audio, devices, onToggle, onDevice, onSource }: {
+function AudioPanel({ audio, onToggle, onDevice }: {
   audio: AudioAnalysis;
-  devices: AudioInputDevice[];
   onToggle: (enabled: boolean) => void;
   onDevice: (deviceId: string) => void;
-  onSource: (source: import("../../types").AudioSource) => void;
 }) {
+  const [devices, setDevices] = useState<{ name: string; is_input: boolean; is_output: boolean }[]>([]);
+
+  useEffect(() => {
+    listAudioDevices()
+      .then((d) => setDevices(d))
+      .catch(() => {});
+  }, []);
+
   return (
     <div style={panelBody}>
       <SectionTitle title="Audio Analysis" />
-      <p style={helpText}>Capture audio from microphone or system output. FFT bands, volume, beat detection, and BPM drive all renderer variables.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <button onClick={() => onSource("mic")} style={{ ...buttonBase, background: audio.source === "mic" ? ACCENT : SURFACE3, borderColor: audio.source === "mic" ? ACCENT : BORDER, color: audio.source === "mic" ? "#001018" : TEXT2 }}>
-          Microphone
-        </button>
-        <button onClick={() => onSource("system")} style={{ ...buttonBase, background: audio.source === "system" ? ACCENT : SURFACE3, borderColor: audio.source === "system" ? ACCENT : BORDER, color: audio.source === "system" ? "#001018" : TEXT2 }}>
-          System Audio
-        </button>
-      </div>
+      <p style={helpText}>Native audio capture via cpal. Select any input or output device including system audio monitors.</p>
       <button onClick={() => onToggle(!audio.enabled)} style={{ ...buttonBase, width: "100%", background: audio.enabled ? ACCENT : SURFACE3, borderColor: audio.enabled ? ACCENT : BORDER, color: audio.enabled ? "#001018" : TEXT }}>
         {audio.enabled ? "Stop Audio" : "Start Audio"}
       </button>
-      {audio.source === "mic" && (
-        <label>
-          <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Input Device</div>
-          <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
-            <option value="">Default microphone</option>
-            {devices.map((device) => (
-              <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
-            ))}
-          </select>
-        </label>
-      )}
+      <label>
+        <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Audio Device</div>
+        <select value={audio.deviceId} onChange={(e) => onDevice(e.target.value)} style={inputStyle}>
+          <option value="">Default output (loopback)</option>
+          {devices.map((d, i) => (
+            <option key={i} value={d.name}>{d.name} {d.is_input ? "[In]" : ""}{d.is_output ? "[Out]" : ""}</option>
+          ))}
+        </select>
+      </label>
       <InfoGrid rows={[
-        ["Source", audio.source === "system" ? "System" : "Mic"],
         ["Status", audio.permission],
-        ["Device", audio.source === "system" ? "System Audio" : (audio.deviceLabel || devices.find((d) => d.deviceId === audio.deviceId)?.label || "Default")],
+        ["Device", audio.deviceLabel || audio.deviceId || "Default"],
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
         ["Phase", `${(audio.beatPhase * 100).toFixed(0)}%`],

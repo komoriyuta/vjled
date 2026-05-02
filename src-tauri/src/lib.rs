@@ -1,8 +1,10 @@
 mod ai;
+mod audio;
 mod calibration;
 mod led;
 mod video_server;
 
+use audio::{AudioCapture, AudioDeviceInfo};
 use calibration::{Calibrator, CalibrationConfig};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
 use led::layout::HardwareLayout;
@@ -14,6 +16,7 @@ use tauri::State;
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
+    audio: Mutex<AudioCapture>,
     video_server_port: u16,
 }
 
@@ -200,6 +203,24 @@ fn get_video_server_port(state: State<AppState>) -> u16 {
 }
 
 #[tauri::command]
+fn audio_list_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+    AudioCapture::list_devices()
+}
+
+#[tauri::command]
+fn audio_start(device: Option<String>, state: State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let mut audio = state.audio.lock().map_err(|e| e.to_string())?;
+    audio.start(device, app)
+}
+
+#[tauri::command]
+fn audio_stop(state: State<AppState>) -> Result<(), String> {
+    let mut audio = state.audio.lock().map_err(|e| e.to_string())?;
+    audio.stop();
+    Ok(())
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -216,6 +237,9 @@ pub fn run() {
             ai_generate,
             project_save,
             project_load,
+            audio_list_devices,
+            audio_start,
+            audio_stop,
             led_load_layout,
             led_init_simple,
             led_send_colors,
@@ -234,6 +258,7 @@ pub fn run() {
             app.manage(AppState {
                 controller: Mutex::new(None),
                 calibrator: Mutex::new(Calibrator::new(CalibrationConfig::default())),
+                audio: Mutex::new(AudioCapture::new()),
                 video_server_port: server.port,
             });
             if let Some(output_window) = app.get_webview_window("output") {
