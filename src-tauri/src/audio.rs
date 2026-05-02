@@ -1,4 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::SampleFormat;
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,6 +151,76 @@ impl AudioCapture {
     }
 }
 
+fn find_device_by_name(host: &cpal::Host, name: &str) -> Option<cpal::Device> {
+    if let Ok(iter) = host.input_devices() {
+        for d in iter {
+            if d.name().map(|n| n == name).unwrap_or(false) {
+                return Some(d);
+            }
+        }
+    }
+    if let Ok(iter) = host.output_devices() {
+        for d in iter {
+            if d.name().map(|n| n == name).unwrap_or(false) {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+fn find_default_device(host: &cpal::Host) -> Option<cpal::Device> {
+    if let Some(input) = host.default_input_device() {
+        return Some(input);
+    }
+    if let Ok(mut iter) = host.input_devices() {
+        if let Some(d) = iter.next() {
+            return Some(d);
+        }
+    }
+    None
+}
+
+fn get_best_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfigRange> {
+    let mut configs: Vec<cpal::SupportedStreamConfigRange> = Vec::new();
+
+    if let Ok(supported) = device.supported_input_configs() {
+        configs.extend(supported.filter(|c| {
+            matches!(
+                c.sample_format(),
+                SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+            )
+        }));
+    }
+
+    if configs.is_empty() {
+        if let Ok(supported) = device.supported_output_configs() {
+            configs.extend(supported.filter(|c| {
+                matches!(
+                    c.sample_format(),
+                    SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+                )
+            }));
+        }
+    }
+
+    configs.sort_by(|a, b| {
+        let a_priority = match a.sample_format() {
+            SampleFormat::F32 => 3,
+            SampleFormat::I16 => 2,
+            _ => 1,
+        };
+        let b_priority = match b.sample_format() {
+            SampleFormat::F32 => 3,
+            SampleFormat::I16 => 2,
+            _ => 1,
+        };
+        b_priority.cmp(&a_priority)
+    });
+
+    configs.into_iter().next()
+}
+
 fn run_capture(
     device_name: Option<String>,
     running: Arc<AtomicBool>,
@@ -159,49 +230,25 @@ fn run_capture(
 
     let device = match &device_name {
         Some(name) => {
-            let mut found: Option<cpal::Device> = None;
-            if let Ok(iter) = host.input_devices() {
-                for d in iter {
-                    if d.name().map(|n| n == *name).unwrap_or(false) {
-                        found = Some(d);
-                        break;
-                    }
-                }
-            }
-            if found.is_none() {
-                if let Ok(iter) = host.output_devices() {
-                    for d in iter {
-                        if d.name().map(|n| n == *name).unwrap_or(false) {
-                            found = Some(d);
-                            break;
-                        }
-                    }
-                }
-            }
-            found.ok_or_else(|| format!("Device not found: {}", name))?
+            find_device_by_name(&host, name).ok_or_else(|| format!("Device not found: {}", name))?
         }
-        None => host
-            .default_output_device()
-            .or_else(|| host.default_input_device())
-            .ok_or("No audio device available")?,
+        None => find_default_device(&host).ok_or(
+            "No audio input device available. On Linux, ensure PulseAudio/PipeWire is running.",
+        )?,
     };
 
-    let config = device
-        .supported_input_configs()
-        .ok()
-        .and_then(|mut c| c.next())
-        .or_else(|| {
-            device
-                .supported_output_configs()
-                .ok()
-                .and_then(|mut c| c.next())
-        })
-        .ok_or("No supported audio config")?;
+    let device_display_name = device.name().unwrap_or_else(|_| "Unknown".into());
+    eprintln!("Audio: using device '{}'", device_display_name);
 
-    let sample_rate = config.min_sample_rate().0 as usize;
-    let stream_config = config
+    let supported = get_best_config(&device).ok_or("No supported audio config for device")?;
+
+    let sample_format = supported.sample_format();
+    let sample_rate = supported.min_sample_rate().0 as usize;
+    let config = supported
         .with_sample_rate(cpal::SampleRate(sample_rate as u32))
         .config();
+
+    eprintln!("Audio: format={:?}, rate={}", sample_format, sample_rate);
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
@@ -223,129 +270,75 @@ fn run_capture(
     };
 
     let running_cb = running.clone();
-    let stream = device
-        .build_input_stream(
-            &stream_config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !running_cb.load(Ordering::SeqCst) {
-                    return;
-                }
 
-                sample_buffer.extend_from_slice(data);
-
-                while sample_buffer.len() >= FFT_SIZE {
-                    let chunk: Vec<f32> = sample_buffer.drain(..FFT_SIZE).collect();
-                    let now = start_time.elapsed().as_secs_f64();
-
-                    let rms: f64 = chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>()
-                        / FFT_SIZE as f64;
-                    let volume = (rms.sqrt() * 2.2).min(1.0).max(0.0);
-
-                    for (i, s) in chunk.iter().enumerate() {
-                        let w = 0.5
-                            * (1.0
-                                - (2.0 * std::f64::consts::PI * i as f64 / (FFT_SIZE - 1) as f64)
-                                    .cos());
-                        fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
-                    }
-
-                    fft.process(&mut fft_buffer);
-
-                    let bin_count = FFT_SIZE / 2;
-                    let magnitude: Vec<f64> = fft_buffer[..bin_count]
+    let stream = match sample_format {
+        SampleFormat::F32 => device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    process_samples(
+                        data,
+                        &mut sample_buffer,
+                        &fft,
+                        &mut fft_buffer,
+                        &mut state,
+                        sample_rate,
+                        &start_time,
+                        &running_cb,
+                        &app,
+                    );
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| format!("Failed to build F32 stream: {}", e))?,
+        SampleFormat::I16 => device
+            .build_input_stream(
+                &config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
+                    process_samples(
+                        &f32_data,
+                        &mut sample_buffer,
+                        &fft,
+                        &mut fft_buffer,
+                        &mut state,
+                        sample_rate,
+                        &start_time,
+                        &running_cb,
+                        &app,
+                    );
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| format!("Failed to build I16 stream: {}", e))?,
+        SampleFormat::U16 => device
+            .build_input_stream(
+                &config,
+                move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                    let f32_data: Vec<f32> = data
                         .iter()
-                        .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f64)
+                        .map(|&s| (s as f32 - 32768.0) / 32768.0)
                         .collect();
-
-                    let bass_end = (18.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
-                    let mid_end = (120.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
-                    let treble_end = (420.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
-
-                    let bass = band_average(&magnitude, bin_count, 1, bass_end.max(2));
-                    let mid =
-                        band_average(&magnitude, bin_count, bass_end, mid_end.max(bass_end + 1));
-                    let treble =
-                        band_average(&magnitude, bin_count, mid_end, treble_end.max(mid_end + 1));
-
-                    let fft_bands: Vec<f64> = (0..FFT_BANDS)
-                        .map(|i| {
-                            let bs = (i * bin_count / FFT_BANDS).max(1);
-                            let be = ((i + 1) * bin_count / FFT_BANDS).max(bs + 1);
-                            let v = band_average(&magnitude, bin_count, bs, be);
-                            (v * 10000.0).round() / 10000.0
-                        })
-                        .collect();
-
-                    state.bass_avg = if state.bass_avg == 0.0 {
-                        bass
-                    } else {
-                        state.bass_avg * 0.96 + bass * 0.04
-                    };
-
-                    let threshold = (state.bass_avg * 1.45).max(0.00012);
-                    let can_beat = now - state.last_beat_time > MIN_BEAT_INTERVAL;
-                    let beat = can_beat && bass > threshold && volume > 0.004;
-
-                    if beat {
-                        if state.last_beat_time > 0.0 {
-                            let interval = now - state.last_beat_time;
-                            if interval >= 0.28 && interval <= 1.6 {
-                                state.intervals.push(interval);
-                                if state.intervals.len() > MAX_INTERVALS {
-                                    let excess = state.intervals.len() - MAX_INTERVALS;
-                                    state.intervals.drain(..excess);
-                                }
-                                let detected_bpm = normalize_bpm(60.0 / median(&state.intervals));
-                                if detected_bpm > 0.0 {
-                                    state.bpm = if state.bpm > 0.0 {
-                                        state.bpm * 0.82 + detected_bpm * 0.18
-                                    } else {
-                                        detected_bpm
-                                    };
-                                }
-                                state.confidence = (state.intervals.len() as f64 / 8.0).min(1.0);
-                            }
-                        }
-                        state.last_beat_time = now;
-                        state.beat_count += 1;
-                    }
-
-                    let beat_len = if state.bpm > 0.0 {
-                        60.0 / state.bpm
-                    } else {
-                        0.0
-                    };
-                    let beat_phase = if beat_len > 0.0 && state.last_beat_time > 0.0 {
-                        ((now - state.last_beat_time) % beat_len / beat_len).min(1.0)
-                    } else {
-                        0.0
-                    };
-
-                    let payload = AudioAnalysisPayload {
-                        volume: (volume * 10000.0).round() / 10000.0,
-                        bass: (bass * 10000.0).round() / 10000.0,
-                        mid: (mid * 10000.0).round() / 10000.0,
-                        treble: (treble * 10000.0).round() / 10000.0,
-                        fft: fft_bands,
-                        bpm: (state.bpm * 10.0).round() / 10.0,
-                        beat,
-                        beat_phase: (beat_phase * 10000.0).round() / 10000.0,
-                        beat_confidence: (state.confidence * 10000.0).round() / 10000.0,
-                        beat_count: state.beat_count,
-                    };
-
-                    let _ = app.emit("audio-analysis", &payload);
-                }
-
-                let keep = FFT_SIZE - 1;
-                if sample_buffer.len() > keep {
-                    sample_buffer.drain(..sample_buffer.len() - keep);
-                }
-            },
-            err_fn,
-            None,
-        )
-        .map_err(|e| format!("Failed to build stream: {}", e))?;
+                    process_samples(
+                        &f32_data,
+                        &mut sample_buffer,
+                        &fft,
+                        &mut fft_buffer,
+                        &mut state,
+                        sample_rate,
+                        &start_time,
+                        &running_cb,
+                        &app,
+                    );
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| format!("Failed to build U16 stream: {}", e))?,
+        _ => return Err(format!("Unsupported sample format: {:?}", sample_format)),
+    };
 
     stream
         .play()
@@ -357,4 +350,127 @@ fn run_capture(
 
     drop(stream);
     Ok(())
+}
+
+fn process_samples(
+    data: &[f32],
+    sample_buffer: &mut Vec<f32>,
+    fft: &Arc<dyn rustfft::Fft<f64>>,
+    fft_buffer: &mut Vec<Complex<f64>>,
+    state: &mut AnalysisState,
+    sample_rate: usize,
+    start_time: &std::time::Instant,
+    running: &AtomicBool,
+    app: &AppHandle,
+) {
+    if !running.load(Ordering::SeqCst) {
+        return;
+    }
+
+    sample_buffer.extend_from_slice(data);
+
+    while sample_buffer.len() >= FFT_SIZE {
+        let chunk: Vec<f32> = sample_buffer.drain(..FFT_SIZE).collect();
+        let now = start_time.elapsed().as_secs_f64();
+
+        let rms: f64 =
+            chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / FFT_SIZE as f64;
+        let volume = (rms.sqrt() * 2.2).min(1.0).max(0.0);
+
+        for (i, s) in chunk.iter().enumerate() {
+            let w =
+                0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (FFT_SIZE - 1) as f64).cos());
+            fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
+        }
+
+        fft.process(fft_buffer);
+
+        let bin_count = FFT_SIZE / 2;
+        let magnitude: Vec<f64> = fft_buffer[..bin_count]
+            .iter()
+            .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f64)
+            .collect();
+
+        let bass_end = (18.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
+        let mid_end = (120.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
+        let treble_end = (420.0 * FFT_SIZE as f64 / sample_rate as f64) as usize;
+
+        let bass = band_average(&magnitude, bin_count, 1, bass_end.max(2));
+        let mid = band_average(&magnitude, bin_count, bass_end, mid_end.max(bass_end + 1));
+        let treble = band_average(&magnitude, bin_count, mid_end, treble_end.max(mid_end + 1));
+
+        let fft_bands: Vec<f64> = (0..FFT_BANDS)
+            .map(|i| {
+                let bs = (i * bin_count / FFT_BANDS).max(1);
+                let be = ((i + 1) * bin_count / FFT_BANDS).max(bs + 1);
+                let v = band_average(&magnitude, bin_count, bs, be);
+                (v * 10000.0).round() / 10000.0
+            })
+            .collect();
+
+        state.bass_avg = if state.bass_avg == 0.0 {
+            bass
+        } else {
+            state.bass_avg * 0.96 + bass * 0.04
+        };
+
+        let threshold = (state.bass_avg * 1.45).max(0.00012);
+        let can_beat = now - state.last_beat_time > MIN_BEAT_INTERVAL;
+        let beat = can_beat && bass > threshold && volume > 0.004;
+
+        if beat {
+            if state.last_beat_time > 0.0 {
+                let interval = now - state.last_beat_time;
+                if interval >= 0.28 && interval <= 1.6 {
+                    state.intervals.push(interval);
+                    if state.intervals.len() > MAX_INTERVALS {
+                        let excess = state.intervals.len() - MAX_INTERVALS;
+                        state.intervals.drain(..excess);
+                    }
+                    let detected_bpm = normalize_bpm(60.0 / median(&state.intervals));
+                    if detected_bpm > 0.0 {
+                        state.bpm = if state.bpm > 0.0 {
+                            state.bpm * 0.82 + detected_bpm * 0.18
+                        } else {
+                            detected_bpm
+                        };
+                    }
+                    state.confidence = (state.intervals.len() as f64 / 8.0).min(1.0);
+                }
+            }
+            state.last_beat_time = now;
+            state.beat_count += 1;
+        }
+
+        let beat_len = if state.bpm > 0.0 {
+            60.0 / state.bpm
+        } else {
+            0.0
+        };
+        let beat_phase = if beat_len > 0.0 && state.last_beat_time > 0.0 {
+            ((now - state.last_beat_time) % beat_len / beat_len).min(1.0)
+        } else {
+            0.0
+        };
+
+        let payload = AudioAnalysisPayload {
+            volume: (volume * 10000.0).round() / 10000.0,
+            bass: (bass * 10000.0).round() / 10000.0,
+            mid: (mid * 10000.0).round() / 10000.0,
+            treble: (treble * 10000.0).round() / 10000.0,
+            fft: fft_bands,
+            bpm: (state.bpm * 10.0).round() / 10.0,
+            beat,
+            beat_phase: (beat_phase * 10000.0).round() / 10000.0,
+            beat_confidence: (state.confidence * 10000.0).round() / 10000.0,
+            beat_count: state.beat_count,
+        };
+
+        let _ = app.emit("audio-analysis", &payload);
+    }
+
+    let keep = FFT_SIZE - 1;
+    if sample_buffer.len() > keep {
+        sample_buffer.drain(..sample_buffer.len() - keep);
+    }
 }
