@@ -53,6 +53,7 @@ struct AnalysisState {
     fft_smooth: Vec<f64>,
     tempo: Tempo,
     aubio_buf: Vec<f32>,
+    bpm_history: Vec<f64>,
     bpm: f64,
     last_beat_time: f64,
     beat_count: u64,
@@ -75,6 +76,7 @@ impl AnalysisState {
             fft_smooth: vec![0.0; FFT_BANDS],
             tempo,
             aubio_buf: Vec::with_capacity(AUBIO_HOP_SIZE),
+            bpm_history: Vec::with_capacity(8),
             bpm: 0.0,
             last_beat_time: 0.0,
             beat_count: 0,
@@ -104,17 +106,11 @@ impl AnalysisState {
                 while normalized > 180.0 {
                     normalized /= 2.0;
                 }
-                if self.bpm <= 0.0 {
-                    self.bpm = normalized;
-                } else {
-                    let diff = (normalized - self.bpm).abs();
-                    if diff > 30.0 {
-                        self.bpm = normalized;
-                    } else {
-                        let alpha = if diff < 10.0 { 0.3 } else { 0.15 };
-                        self.bpm = self.bpm * (1.0 - alpha) + normalized * alpha;
-                    }
+                self.bpm_history.push(normalized);
+                if self.bpm_history.len() > 8 {
+                    self.bpm_history.remove(0);
                 }
+                self.bpm = self.bpm_history.iter().sum::<f64>() / self.bpm_history.len() as f64;
             }
         }
     }
