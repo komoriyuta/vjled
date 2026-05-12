@@ -3,14 +3,40 @@ import { GpuPixelSampler } from "./gpuPixelSampler";
 import type { CalibrationPoint, LedConfig } from "../types";
 
 let gpuSampler: GpuPixelSampler | null | undefined;
+const FULL_FRAME_READ_THRESHOLD = 96;
+
+function clampByte(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
 
 export function applyBrightnessCurve(
   value: number,
   factor: number,
 ): number {
   const normalized = value / 255;
-  const curved = Math.min(1.0, normalized * factor);
-  return Math.round(curved * curved * 255);
+  const curved = Math.max(0, Math.min(1, normalized * factor));
+  return clampByte(curved * curved * 255);
+}
+
+function setColor(
+  colors: Map<number, [number, number, number]>,
+  lanternId: number,
+  r: number,
+  g: number,
+  b: number,
+  config: LedConfig,
+): void {
+  colors.set(lanternId, [
+    applyBrightnessCurve(r * config.brightness, config.colorGain[0]),
+    applyBrightnessCurve(g * config.brightness, config.colorGain[1]),
+    applyBrightnessCurve(b * config.brightness, config.colorGain[2]),
+  ]);
 }
 
 export function extractPixelColors(
@@ -21,21 +47,32 @@ export function extractPixelColors(
   config: LedConfig,
 ): Map<number, [number, number, number]> {
   const colors = new Map<number, [number, number, number]>();
-  if (points.length === 0) return colors;
+  if (points.length === 0 || canvasWidth <= 0 || canvasHeight <= 0) return colors;
+
+  if (points.length >= FULL_FRAME_READ_THRESHOLD) {
+    const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const data = imageData.data;
+    for (const point of points) {
+      const px = Math.round(clampUnit(point.x) * (canvasWidth - 1));
+      const py = Math.round(clampUnit(point.y) * (canvasHeight - 1));
+      const offset = (py * canvasWidth + px) * 4;
+      setColor(
+        colors,
+        point.lanternId,
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        config,
+      );
+    }
+    return colors;
+  }
 
   for (const point of points) {
-    const px = Math.round(point.x * (canvasWidth - 1));
-    const py = Math.round(point.y * (canvasHeight - 1));
+    const px = Math.round(clampUnit(point.x) * (canvasWidth - 1));
+    const py = Math.round(clampUnit(point.y) * (canvasHeight - 1));
     const data = ctx.getImageData(px, py, 1, 1).data;
-    const br = applyBrightnessCurve(data[0] * config.brightness, config.colorGain[0]);
-    const bg = applyBrightnessCurve(data[1] * config.brightness, config.colorGain[1]);
-    const bb = applyBrightnessCurve(data[2] * config.brightness, config.colorGain[2]);
-
-    colors.set(point.lanternId, [
-      Math.min(255, br),
-      Math.min(255, bg),
-      Math.min(255, bb),
-    ]);
+    setColor(colors, point.lanternId, data[0], data[1], data[2], config);
   }
 
   return colors;
@@ -53,7 +90,13 @@ export function extractPixelColorsGpu(
       gpuSampler = null;
     }
   }
-  return gpuSampler?.sample(canvas, points, config) ?? null;
+  try {
+    return gpuSampler?.sample(canvas, points, config) ?? null;
+  } catch {
+    gpuSampler?.destroy();
+    gpuSampler = null;
+    return null;
+  }
 }
 
 export async function sendLedFrameFromCanvas(
@@ -107,7 +150,8 @@ export async function sendLedFrame(
 export function rgbaFromCanvas(
   canvas: HTMLCanvasElement,
 ): { data: number[]; width: number; height: number } {
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { data: [], width: canvas.width, height: canvas.height };
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   return {
     data: Array.from(imgData.data),

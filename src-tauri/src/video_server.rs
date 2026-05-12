@@ -7,8 +7,22 @@ pub struct VideoFileServer {
 
 impl VideoFileServer {
     pub fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind video server");
-        let port = listener.local_addr().unwrap().port();
+        let listener = match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(e) => {
+                let _ = std::io::stderr()
+                    .write_all(format!("Failed to bind video server: {}\n", e).as_bytes());
+                return Self { port: 0 };
+            }
+        };
+        let port = match listener.local_addr() {
+            Ok(addr) => addr.port(),
+            Err(e) => {
+                let _ = std::io::stderr()
+                    .write_all(format!("Failed to read video server address: {}\n", e).as_bytes());
+                return Self { port: 0 };
+            }
+        };
 
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {

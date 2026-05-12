@@ -1,5 +1,6 @@
 import type { Renderer } from "../types";
 import type { AudioAnalysis } from "../../types";
+import { bindFullscreenQuad, createFullscreenQuad, createProgram } from "../webgl";
 
 const VERT = `
 attribute vec2 a_pos;
@@ -42,7 +43,9 @@ export class GLSLRenderer implements Renderer {
   private gl: WebGLRenderingContext | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private program: WebGLProgram | null = null;
+  private quadBuffer: WebGLBuffer | null = null;
   private uLocs: Record<string, WebGLUniformLocation | null> = {};
+  private readonly fftUniform = new Float32Array(32);
   private frame = 0;
   private code = "";
 
@@ -55,7 +58,7 @@ export class GLSLRenderer implements Renderer {
       antialias: false,
     });
     if (!this.gl) return;
-    this.setupQuad();
+    this.quadBuffer = createFullscreenQuad(this.gl);
   }
 
   setCode(code: string): void {
@@ -74,33 +77,8 @@ export class GLSLRenderer implements Renderer {
     }
 
     const source = buildFragmentSource(this.code);
-    const fs = gl.createShader(gl.FRAGMENT_SHADER)!;
-    gl.shaderSource(fs, source);
-    gl.compileShader(fs);
-    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-      const err = gl.getShaderInfoLog(fs);
-      console.error("GLSL error:\n", err);
-      gl.deleteShader(fs);
-      return;
-    }
-
-    const vs = gl.createShader(gl.VERTEX_SHADER)!;
-    gl.shaderSource(vs, VERT);
-    gl.compileShader(vs);
-
-    const prog = gl.createProgram()!;
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.error("GLSL link error:", gl.getProgramInfoLog(prog));
-      gl.deleteProgram(prog);
-      return;
-    }
-
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
+    const prog = createProgram(gl, VERT, source);
+    if (!prog) return;
 
     this.program = prog;
     this.uLocs = {};
@@ -109,26 +87,17 @@ export class GLSLRenderer implements Renderer {
     }
   }
 
-  private setupQuad(): void {
-    const gl = this.gl!;
-    const buf = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-  }
-
   update(time: number, _dt: number, audio: AudioAnalysis): void {
     const gl = this.gl;
     const c = this.canvas;
-    if (!gl || !c || !this.program) return;
+    if (!gl || !c || !this.program || !this.quadBuffer) return;
 
     gl.viewport(0, 0, c.width, c.height);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.program);
 
-    const posLoc = gl.getAttribLocation(this.program, "a_pos");
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    if (!bindFullscreenQuad(gl, this.program, this.quadBuffer)) return;
 
     if (this.uLocs.iTime != null) gl.uniform1f(this.uLocs.iTime, time);
     if (this.uLocs.iResolution != null) gl.uniform2f(this.uLocs.iResolution, c.width, c.height);
@@ -137,7 +106,13 @@ export class GLSLRenderer implements Renderer {
     if (this.uLocs.iBeat != null) gl.uniform1f(this.uLocs.iBeat, audio.beat ? 1 : 0);
     if (this.uLocs.iBeatPhase != null) gl.uniform1f(this.uLocs.iBeatPhase, audio.beatPhase);
     if (this.uLocs.iBeatCount != null) gl.uniform1f(this.uLocs.iBeatCount, audio.beatCount);
-    if (this.uLocs.iFft != null) gl.uniform1fv(this.uLocs.iFft, new Float32Array(audio.fft.slice(0, 32)));
+    if (this.uLocs.iFft != null) {
+      this.fftUniform.fill(0);
+      for (let i = 0; i < this.fftUniform.length && i < audio.fft.length; i++) {
+        this.fftUniform[i] = audio.fft[i];
+      }
+      gl.uniform1fv(this.uLocs.iFft, this.fftUniform);
+    }
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.frame++;
@@ -151,9 +126,11 @@ export class GLSLRenderer implements Renderer {
   }
 
   destroy(): void {
-    if (this.gl && this.program) {
-      this.gl.deleteProgram(this.program);
+    if (this.gl) {
+      if (this.program) this.gl.deleteProgram(this.program);
+      if (this.quadBuffer) this.gl.deleteBuffer(this.quadBuffer);
       this.program = null;
+      this.quadBuffer = null;
     }
   }
 }

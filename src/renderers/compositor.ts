@@ -1,3 +1,5 @@
+import { bindFullscreenQuad, createFullscreenQuad, createProgram } from "./webgl";
+
 const VERT = `
 attribute vec2 a_pos;
 varying vec2 v_uv;
@@ -28,6 +30,7 @@ export class Compositor {
   private gl: WebGLRenderingContext | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private program: WebGLProgram | null = null;
+  private quadBuffer: WebGLBuffer | null = null;
   private texA: WebGLTexture | null = null;
   private texB: WebGLTexture | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
@@ -38,22 +41,11 @@ export class Compositor {
     if (!gl) return;
     this.gl = gl;
 
-    const vs = gl.createShader(gl.VERTEX_SHADER)!;
-    gl.shaderSource(vs, VERT);
-    gl.compileShader(vs);
-
-    const fs = gl.createShader(gl.FRAGMENT_SHADER)!;
-    gl.shaderSource(fs, FRAG);
-    gl.compileShader(fs);
-
-    const prog = gl.createProgram()!;
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-
+    const prog = createProgram(gl, VERT, FRAG);
+    const quadBuffer = createFullscreenQuad(gl);
+    if (!prog || !quadBuffer) return;
     this.program = prog;
+    this.quadBuffer = quadBuffer;
     this.u = {
       u_texA: gl.getUniformLocation(prog, "u_texA"),
       u_texB: gl.getUniformLocation(prog, "u_texB"),
@@ -62,17 +54,10 @@ export class Compositor {
       u_hasB: gl.getUniformLocation(prog, "u_hasB"),
     };
 
-    const buf = gl.createBuffer()!;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-
-    const posLoc = gl.getAttribLocation(prog, "a_pos");
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-
     this.texA = gl.createTexture();
     this.texB = gl.createTexture();
     for (const tex of [this.texA, this.texB]) {
+      if (!tex) continue;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -82,7 +67,8 @@ export class Compositor {
   }
 
   private uploadTex(tex: WebGLTexture, unit: number, source: HTMLCanvasElement): void {
-    const gl = this.gl!;
+    const gl = this.gl;
+    if (!gl) return;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
@@ -90,7 +76,7 @@ export class Compositor {
 
   render(canvasA: HTMLCanvasElement | null, canvasB: HTMLCanvasElement | null, crossfade: number): void {
     const gl = this.gl;
-    if (!gl || !this.program) return;
+    if (!gl || !this.program || !this.quadBuffer) return;
 
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clearColor(0, 0, 0, 1);
@@ -115,6 +101,7 @@ export class Compositor {
 
     if (this.u.u_crossfade != null) gl.uniform1f(this.u.u_crossfade, crossfade);
 
+    if (!bindFullscreenQuad(gl, this.program, this.quadBuffer)) return;
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -130,10 +117,12 @@ export class Compositor {
     if (gl) {
       if (this.texA) gl.deleteTexture(this.texA);
       if (this.texB) gl.deleteTexture(this.texB);
+      if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer);
       if (this.program) gl.deleteProgram(this.program);
     }
     this.texA = null;
     this.texB = null;
     this.program = null;
+    this.quadBuffer = null;
   }
 }

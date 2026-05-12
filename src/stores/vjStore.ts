@@ -169,7 +169,6 @@ export const useVJStore = create<VJStore>((set, get) => ({
       audio: {
         ...emptyAudioAnalysis,
         ...(data.audio ?? {}),
-        enabled: false,
         beat: false,
       },
     });

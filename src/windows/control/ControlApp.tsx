@@ -14,6 +14,7 @@ import {
 import type { AudioAnalysis, Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrameFromCanvas } from "../../led/pixelExtractor";
+import { createProjectData, parseProjectData } from "../../project";
 import Editor from "@monaco-editor/react";
 import LedPanel from "../../components/LedPanel";
 
@@ -101,23 +102,21 @@ export default function ControlApp() {
       if (!selected) return;
       const state = useVJStore.getState();
       const led = useLedStore.getState();
+      const ai = useAiStore.getState();
       await invoke("project_save", {
         path: selected as string,
-        data: {
-          version: 1,
-          vj: {
-            scenes: state.scenes,
-            busA: state.busA,
-            busB: state.busB,
-            crossfade: state.crossfade,
-            isPlaying: state.isPlaying,
-            selectedSceneId: state.selectedSceneId,
-          },
+        data: createProjectData({
+          vj: state,
           led: {
             config: led.config,
             calibrationPoints: led.calibrationPoints,
+            layoutInfo: led.layoutInfo,
           },
-        },
+          ai: {
+            baseUrl: ai.config.baseUrl,
+            model: ai.config.model,
+          },
+        }),
       });
     } catch (e) {
       console.error("Save failed:", e);
@@ -131,18 +130,21 @@ export default function ControlApp() {
         filters: [{ name: "Project", extensions: ["vjled.json", "json"] }],
       });
       if (!selected) return;
-      const project = await invoke<{ version: number; vj: unknown; led?: { config: unknown; calibrationPoints: unknown } }>("project_load", { path: selected as string });
-      if (project.vj) loadProject(project.vj as any);
-      if (project.led) {
-        ledLoadProject(
-          (project.led as any).config ?? useLedStore.getState().config,
-          (project.led as any).calibrationPoints ?? [],
-        );
+      const rawProject = await invoke<unknown>("project_load", { path: selected as string });
+      const project = parseProjectData(rawProject, useLedStore.getState().config);
+      loadProject(project.vj);
+      ledLoadProject(
+        project.led.config,
+        project.led.calibrationPoints,
+        project.led.layoutInfo,
+      );
+      if (project.ai) {
+        aiSetConfig(project.ai);
       }
     } catch (e) {
       console.error("Load failed:", e);
     }
-  }, [loadProject, ledLoadProject]);
+  }, [loadProject, ledLoadProject, aiSetConfig]);
 
   const handleAiGenerate = useCallback(async (sceneType: SceneType, prompt: string) => {
     try {

@@ -68,6 +68,11 @@ function pointsKey(points: CalibrationPoint[]): string {
   return points.map((p) => `${p.lanternId}:${p.x.toFixed(6)},${p.y.toFixed(6)}`).join("|");
 }
 
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
 export class GpuPixelSampler {
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
@@ -146,6 +151,10 @@ export class GpuPixelSampler {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.outputTexture, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      throw new Error("GPU pixel sampler framebuffer is incomplete");
+    }
     gl.uniform1f(this.countLocation, points.length);
     gl.uniform1f(this.brightnessLocation, config.brightness);
     gl.uniform3f(this.gainLocation, config.colorGain[0], config.colorGain[1], config.colorGain[2]);
@@ -187,8 +196,8 @@ export class GpuPixelSampler {
     const coords = new Float32Array(points.length * 2);
     for (let i = 0; i < points.length; i++) {
       indices[i] = i;
-      coords[i * 2] = points[i].x;
-      coords[i * 2 + 1] = 1 - points[i].y;
+      coords[i * 2] = clampUnit(points[i].x);
+      coords[i * 2 + 1] = 1 - clampUnit(points[i].y);
     }
 
     gl.bindVertexArray(this.vao);

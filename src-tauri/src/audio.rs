@@ -2,7 +2,7 @@ use aubio::{OnsetMode, Tempo};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use crossbeam::channel::{bounded, Receiver, Sender};
-use rustfft::{num_complex::Complex, FftPlanner};
+use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use serde::Serialize;
 #[cfg(target_os = "linux")]
 use std::io::Read;
@@ -61,16 +61,16 @@ struct AnalysisState {
 }
 
 impl AnalysisState {
-    fn new(sample_rate: u32) -> Self {
+    fn new(sample_rate: u32) -> Result<Self, String> {
         let tempo = Tempo::new(
             OnsetMode::SpecFlux,
             AUBIO_BUF_SIZE,
             AUBIO_HOP_SIZE,
             sample_rate,
         )
-        .expect("Failed to create aubio Tempo");
+        .map_err(|e| format!("Failed to create aubio tempo analyzer: {}", e))?;
 
-        Self {
+        Ok(Self {
             fft_floor: vec![0.0; FFT_BANDS],
             fft_peak: vec![0.0001; FFT_BANDS],
             fft_smooth: vec![0.0; FFT_BANDS],
@@ -81,21 +81,19 @@ impl AnalysisState {
             last_beat_time: 0.0,
             beat_count: 0,
             emitted_beat_count: 0,
-        }
+        })
     }
 
     fn feed_aubio(&mut self, mono_samples: &[f32], now: f64) {
         self.aubio_buf.extend_from_slice(mono_samples);
         while self.aubio_buf.len() >= AUBIO_HOP_SIZE {
-            let chunk: Vec<f32> = self.aubio_buf[..AUBIO_HOP_SIZE].to_vec();
-            self.aubio_buf.drain(..AUBIO_HOP_SIZE);
-
-            if let Ok(is_beat) = self.tempo.do_result(&chunk) {
+            if let Ok(is_beat) = self.tempo.do_result(&self.aubio_buf[..AUBIO_HOP_SIZE]) {
                 if is_beat > 0.0 {
                     self.last_beat_time = now;
                     self.beat_count += 1;
                 }
             }
+            self.aubio_buf.drain(..AUBIO_HOP_SIZE);
 
             let aubio_bpm = self.tempo.get_bpm();
             if aubio_bpm > 0.0 {
@@ -155,6 +153,100 @@ impl AnalysisState {
             fft_bands.push((self.fft_smooth[i] * 10000.0).round() / 10000.0);
         }
         fft_bands
+    }
+}
+
+struct AnalysisRuntime {
+    fft: Arc<dyn Fft<f64>>,
+    fft_buffer: Vec<Complex<f64>>,
+    sample_buffer: Vec<f32>,
+    state: AnalysisState,
+    start_time: std::time::Instant,
+    sample_rate: u32,
+}
+
+impl AnalysisRuntime {
+    fn new(sample_rate: u32) -> Result<Self, String> {
+        let mut planner = FftPlanner::new();
+        Ok(Self {
+            fft: planner.plan_fft_forward(FFT_SIZE),
+            fft_buffer: vec![Complex::new(0.0, 0.0); FFT_SIZE],
+            sample_buffer: Vec::with_capacity(FFT_SIZE * 2),
+            state: AnalysisState::new(sample_rate)?,
+            start_time: std::time::Instant::now(),
+            sample_rate,
+        })
+    }
+
+    fn push_mono(&mut self, mono: &[f32], app: &AppHandle) {
+        self.sample_buffer.extend_from_slice(mono);
+        self.state.feed_aubio(mono, self.start_time.elapsed().as_secs_f64());
+
+        while self.sample_buffer.len() >= FFT_SIZE {
+            let chunk = &self.sample_buffer[..FFT_SIZE];
+            let now = self.start_time.elapsed().as_secs_f64();
+
+            let rms: f64 =
+                chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / FFT_SIZE as f64;
+            if rms.sqrt() >= 0.002 {
+                for (i, s) in chunk.iter().enumerate() {
+                    let w = 0.5
+                        * (1.0
+                            - (2.0 * std::f64::consts::PI * i as f64
+                                / (FFT_SIZE - 1) as f64)
+                                .cos());
+                    self.fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
+                }
+
+                self.fft.process(&mut self.fft_buffer);
+
+                let bin_count = FFT_SIZE / 2;
+                let mut magnitude: Vec<f64> = Vec::with_capacity(bin_count);
+                magnitude.extend(
+                    self.fft_buffer[..bin_count]
+                        .iter()
+                        .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f64),
+                );
+
+                let bin_for_hz = |hz: f64| -> usize {
+                    ((hz * FFT_SIZE as f64 / self.sample_rate as f64).round() as usize)
+                        .min(bin_count)
+                };
+
+                let raw_fft_bands: Vec<f64> = (0..FFT_BANDS)
+                    .map(|i| {
+                        let min_hz = 30.0_f64;
+                        let max_hz = (self.sample_rate as f64 / 2.0).min(16_000.0);
+                        let t0 = i as f64 / FFT_BANDS as f64;
+                        let t1 = (i + 1) as f64 / FFT_BANDS as f64;
+                        let start_hz = min_hz * (max_hz / min_hz).powf(t0);
+                        let end_hz = min_hz * (max_hz / min_hz).powf(t1);
+                        let bs = bin_for_hz(start_hz).max(1);
+                        let be = bin_for_hz(end_hz).max(bs + 1);
+                        band_average(&magnitude, bin_count, bs, be)
+                    })
+                    .collect();
+
+                let fft_bands = self.state.normalize_fft(&raw_fft_bands);
+                let beat_phase = self.state.beat_phase(now);
+                let payload = AudioAnalysisPayload {
+                    fft: fft_bands,
+                    bpm: (self.state.bpm * 10.0).round() / 10.0,
+                    beat: self.state.is_new_beat(),
+                    beat_phase: (beat_phase * 10000.0).round() / 10000.0,
+                    beat_count: self.state.beat_count,
+                };
+
+                let _ = app.emit("audio-analysis", &payload);
+            }
+
+            self.sample_buffer.drain(..HOP_SIZE);
+        }
+
+        let keep = FFT_SIZE - 1;
+        if self.sample_buffer.len() > keep {
+            self.sample_buffer.drain(..self.sample_buffer.len() - keep);
+        }
     }
 }
 
@@ -355,16 +447,28 @@ fn select_target(host: &cpal::Host, requested: Option<&str>) -> Result<CaptureTa
             .map(CaptureTarget::Input)
             .or_else(|| find_output_by_name(host, name).map(CaptureTarget::OutputLoopback))
             .ok_or_else(|| format!("Device not found: {}", name)),
-        None => find_default_loopback(host)
-            .or_else(|| host.default_input_device().map(CaptureTarget::Input))
-            .ok_or("No audio input device available".into()),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                Ok(host.default_input_device()
+                    .map(CaptureTarget::Input)
+                    .or_else(|| find_default_loopback(host))
+                    .ok_or::<String>("No audio input device available".into())?)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                find_default_loopback(host)
+                    .or_else(|| host.default_input_device().map(CaptureTarget::Input))
+                    .ok_or("No audio input device available".into())
+            }
+        }
     }
 }
 
 fn loopback_unavailable_message() -> String {
     #[cfg(target_os = "macos")]
     {
-        return "No system audio loopback input found. Install/select BlackHole, Soundflower, Loopback, or another virtual audio device.".into();
+        return "System audio loopback requires a virtual audio driver.\nInstall BlackHole (free): https://github.com/existentialaudio/blackhole\nThen select the BlackHole device as input.".into();
     }
 
     #[cfg(target_os = "linux")]
@@ -492,12 +596,14 @@ fn run_analysis_loop(
     app: AppHandle,
     channels: usize,
 ) {
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
-    let mut fft_buffer: Vec<Complex<f64>> = vec![Complex::new(0.0, 0.0); FFT_SIZE];
-    let mut sample_buffer: Vec<f32> = Vec::with_capacity(FFT_SIZE * 2);
-    let start_time = std::time::Instant::now();
-    let mut state = AnalysisState::new(sample_rate);
+    let mut analysis = match AnalysisRuntime::new(sample_rate) {
+        Ok(analysis) => analysis,
+        Err(e) => {
+            let _ = app.emit("audio-error", e);
+            running.store(false, Ordering::SeqCst);
+            return;
+        }
+    };
 
     while running.load(Ordering::SeqCst) {
         let data = match rx.recv_timeout(std::time::Duration::from_millis(50)) {
@@ -513,71 +619,7 @@ fn run_analysis_loop(
                 .collect()
         };
 
-        sample_buffer.extend_from_slice(&mono);
-
-        state.feed_aubio(&mono, start_time.elapsed().as_secs_f64());
-
-        while sample_buffer.len() >= FFT_SIZE {
-            let chunk: Vec<f32> = sample_buffer[..FFT_SIZE].to_vec();
-            sample_buffer.drain(..HOP_SIZE);
-            let now = start_time.elapsed().as_secs_f64();
-
-            let rms: f64 =
-                chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / FFT_SIZE as f64;
-            if rms.sqrt() < 0.002 {
-                continue;
-            }
-
-            for (i, s) in chunk.iter().enumerate() {
-                let w = 0.5
-                    * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (FFT_SIZE - 1) as f64).cos());
-                fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
-            }
-
-            fft.process(&mut fft_buffer);
-
-            let bin_count = FFT_SIZE / 2;
-            let magnitude: Vec<f64> = fft_buffer[..bin_count]
-                .iter()
-                .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f64)
-                .collect();
-
-            let bin_for_hz = |hz: f64| -> usize {
-                ((hz * FFT_SIZE as f64 / sample_rate as f64).round() as usize).min(bin_count)
-            };
-
-            let raw_fft_bands: Vec<f64> = (0..FFT_BANDS)
-                .map(|i| {
-                    let min_hz = 30.0_f64;
-                    let max_hz = (sample_rate as f64 / 2.0).min(16_000.0);
-                    let t0 = i as f64 / FFT_BANDS as f64;
-                    let t1 = (i + 1) as f64 / FFT_BANDS as f64;
-                    let start_hz = min_hz * (max_hz / min_hz).powf(t0);
-                    let end_hz = min_hz * (max_hz / min_hz).powf(t1);
-                    let bs = bin_for_hz(start_hz).max(1);
-                    let be = bin_for_hz(end_hz).max(bs + 1);
-                    band_average(&magnitude, bin_count, bs, be)
-                })
-                .collect();
-
-            let fft_bands = state.normalize_fft(&raw_fft_bands);
-
-            let beat_phase = state.beat_phase(now);
-            let payload = AudioAnalysisPayload {
-                fft: fft_bands,
-                bpm: (state.bpm * 10.0).round() / 10.0,
-                beat: state.is_new_beat(),
-                beat_phase: (beat_phase * 10000.0).round() / 10000.0,
-                beat_count: state.beat_count,
-            };
-
-            let _ = app.emit("audio-analysis", &payload);
-        }
-
-        let keep = FFT_SIZE - 1;
-        if sample_buffer.len() > keep {
-            sample_buffer.drain(..sample_buffer.len() - keep);
-        }
+        analysis.push_mono(&mono, &app);
     }
 }
 
@@ -624,12 +666,7 @@ fn run_pipewire_capture(
         pipewire_target(requested).unwrap_or_else(|| "default input".into())
     );
 
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
-    let mut fft_buffer: Vec<Complex<f64>> = vec![Complex::new(0.0, 0.0); FFT_SIZE];
-    let mut sample_buffer: Vec<f32> = Vec::with_capacity(FFT_SIZE * 2);
-    let start_time = std::time::Instant::now();
-    let mut state = AnalysisState::new(sample_rate);
+    let mut analysis = AnalysisRuntime::new(sample_rate)?;
 
     let mut bytes = vec![0_u8; 4096 * channels * std::mem::size_of::<f32>()];
     while running.load(Ordering::SeqCst) {
@@ -653,77 +690,27 @@ fn run_pipewire_capture(
             .map(|frame| frame.iter().copied().sum::<f32>() / channels as f32)
             .collect();
 
-        sample_buffer.extend_from_slice(&mono);
-
-        state.feed_aubio(&mono, start_time.elapsed().as_secs_f64());
-
-        while sample_buffer.len() >= FFT_SIZE {
-            let chunk: Vec<f32> = sample_buffer[..FFT_SIZE].to_vec();
-            sample_buffer.drain(..HOP_SIZE);
-            let now = start_time.elapsed().as_secs_f64();
-
-            let rms: f64 =
-                chunk.iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>() / FFT_SIZE as f64;
-            if rms.sqrt() < 0.002 {
-                continue;
-            }
-
-            for (i, s) in chunk.iter().enumerate() {
-                let w = 0.5
-                    * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (FFT_SIZE - 1) as f64).cos());
-                fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
-            }
-
-            fft.process(&mut fft_buffer);
-
-            let bin_count = FFT_SIZE / 2;
-            let magnitude: Vec<f64> = fft_buffer[..bin_count]
-                .iter()
-                .map(|c| (c.re * c.re + c.im * c.im).sqrt() / FFT_SIZE as f64)
-                .collect();
-
-            let bin_for_hz = |hz: f64| -> usize {
-                ((hz * FFT_SIZE as f64 / sample_rate as f64).round() as usize).min(bin_count)
-            };
-
-            let raw_fft_bands: Vec<f64> = (0..FFT_BANDS)
-                .map(|i| {
-                    let min_hz = 30.0_f64;
-                    let max_hz = (sample_rate as f64 / 2.0).min(16_000.0);
-                    let t0 = i as f64 / FFT_BANDS as f64;
-                    let t1 = (i + 1) as f64 / FFT_BANDS as f64;
-                    let start_hz = min_hz * (max_hz / min_hz).powf(t0);
-                    let end_hz = min_hz * (max_hz / min_hz).powf(t1);
-                    let bs = bin_for_hz(start_hz).max(1);
-                    let be = bin_for_hz(end_hz).max(bs + 1);
-                    band_average(&magnitude, bin_count, bs, be)
-                })
-                .collect();
-
-            let fft_bands = state.normalize_fft(&raw_fft_bands);
-
-            let beat_phase = state.beat_phase(now);
-            let payload = AudioAnalysisPayload {
-                fft: fft_bands,
-                bpm: (state.bpm * 10.0).round() / 10.0,
-                beat: state.is_new_beat(),
-                beat_phase: (beat_phase * 10000.0).round() / 10000.0,
-                beat_count: state.beat_count,
-            };
-
-            let _ = app.emit("audio-analysis", &payload);
-        }
-
-        let keep = FFT_SIZE - 1;
-        if sample_buffer.len() > keep {
-            sample_buffer.drain(..sample_buffer.len() - keep);
-        }
+        analysis.push_mono(&mono, &app);
     }
 
     let _ = child.kill();
     let _ = child.wait();
     running.store(false, Ordering::SeqCst);
     Ok(())
+}
+
+fn mic_error(e: cpal::BuildStreamError) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!(
+            "Failed to open audio input: {}. If microphone permission was denied, grant it in System Settings > Privacy & Security > Microphone.",
+            e
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("Failed to open audio input: {}", e)
+    }
 }
 
 fn find_default_loopback(host: &cpal::Host) -> Option<CaptureTarget> {
@@ -855,7 +842,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build F32 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         SampleFormat::I16 => {
             let tx = tx.clone();
@@ -869,7 +856,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build I16 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         SampleFormat::U16 => {
             let tx = tx.clone();
@@ -886,7 +873,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build U16 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         _ => return Err(format!("Unsupported sample format: {:?}", sample_format)),
     };

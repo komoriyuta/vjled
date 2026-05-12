@@ -18,6 +18,11 @@ interface UseEngineOptions {
   ledPoints?: CalibrationPoint[];
 }
 
+interface RendererEntry {
+  renderer: Renderer;
+  canvas: HTMLCanvasElement;
+}
+
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
   if (!src || !dst) return;
   const ctx = dst.getContext("2d");
@@ -37,7 +42,8 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 export function useEngine(opts: UseEngineOptions) {
   const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
 
-  const renderersRef = useRef<Map<string, { renderer: Renderer; canvas: HTMLCanvasElement }>>(new Map());
+  const renderersRef = useRef<Map<string, RendererEntry>>(new Map());
+  const loadingRenderersRef = useRef<Map<string, Promise<RendererEntry | null>>>(new Map());
   const compositorRef = useRef<Compositor | null>(null);
   const compositorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const stateRef = useRef<VJStatePayload>({
@@ -56,6 +62,8 @@ export function useEngine(opts: UseEngineOptions) {
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
   const lastBpmRef = useRef(120);
+  const syncVersionRef = useRef(0);
+  const disposedRef = useRef(false);
   const ledConfigRef = useRef(ledConfig);
   const ledPointsRef = useRef(ledPoints);
   ledConfigRef.current = ledConfig;
@@ -66,29 +74,47 @@ export function useEngine(opts: UseEngineOptions) {
   const H = Math.round(1080 * scale);
 
   const getOrCreate = useCallback(
-    (scene: Scene) => {
+    async (scene: Scene): Promise<RendererEntry | null> => {
       const existing = renderersRef.current.get(scene.id);
       if (existing) return existing;
+      const loading = loadingRenderersRef.current.get(scene.id);
+      if (loading) return loading;
 
-      const r = createRenderer(scene.type);
-      if (!r) return null;
+      const load = (async () => {
+        const r = await createRenderer(scene.type);
+        if (!r) return null;
 
-      const c = document.createElement("canvas");
-      c.width = W;
-      c.height = H;
+        const c = document.createElement("canvas");
+        c.width = W;
+        c.height = H;
 
-      r.init(c);
-      if (scene.code) {
-        r.setCode(scene.code);
-        codeCacheRef.current.set(scene.id, scene.code);
+        r.init(c);
+        if (scene.code) {
+          r.setCode(scene.code);
+          codeCacheRef.current.set(scene.id, scene.code);
+        }
+
+        if (disposedRef.current) {
+          r.destroy();
+          c.remove();
+          codeCacheRef.current.delete(scene.id);
+          return null;
+        }
+
+        const entry = { renderer: r, canvas: c };
+        renderersRef.current.set(scene.id, entry);
+        for (const cmd of controlCacheRef.current.get(scene.id) ?? []) {
+          r.control?.(cmd.action, cmd.value);
+        }
+        return entry;
+      })();
+
+      loadingRenderersRef.current.set(scene.id, load);
+      try {
+        return await load;
+      } finally {
+        loadingRenderersRef.current.delete(scene.id);
       }
-
-      const entry = { renderer: r, canvas: c };
-      renderersRef.current.set(scene.id, entry);
-      for (const cmd of controlCacheRef.current.get(scene.id) ?? []) {
-        r.control?.(cmd.action, cmd.value);
-      }
-      return entry;
     },
     [W, H],
   );
@@ -110,6 +136,7 @@ export function useEngine(opts: UseEngineOptions) {
   useEffect(() => {
     const container = outputContainerRef.current;
     if (!container) return;
+    disposedRef.current = false;
 
     const compCanvas = document.createElement("canvas");
     compCanvas.width = W;
@@ -124,6 +151,7 @@ export function useEngine(opts: UseEngineOptions) {
 
     const unlistenState = listenVJState((state) => {
       stateRef.current = state;
+      const syncVersion = ++syncVersionRef.current;
 
       const { scenes, busA, busB, selectedSceneId } = state;
       const activeIds = new Set<string>();
@@ -140,30 +168,41 @@ export function useEngine(opts: UseEngineOptions) {
         }
       }
 
-      const lookup = new Map(scenes.map((s) => [s.id, s]));
-      for (const id of activeIds) {
-        const scene = lookup.get(id);
-        if (!scene) continue;
-        const entry = getOrCreate(scene);
-        if (!entry) continue;
+      void (async () => {
+        const lookup = new Map(scenes.map((s) => [s.id, s]));
+        for (const id of activeIds) {
+          const scene = lookup.get(id);
+          if (!scene) continue;
+          const entry = await getOrCreate(scene);
+          if (syncVersion !== syncVersionRef.current) {
+            if (entry && !activeIds.has(id)) {
+              entry.renderer.destroy();
+              entry.canvas.remove();
+              renderersRef.current.delete(id);
+              codeCacheRef.current.delete(id);
+            }
+            return;
+          }
+          if (!entry) continue;
 
-        const prevCode = codeCacheRef.current.get(id);
-        if (prevCode !== scene.code) {
-          entry.renderer.setCode(scene.code);
-          codeCacheRef.current.set(id, scene.code);
-          for (const cmd of controlCacheRef.current.get(id) ?? []) {
-            entry.renderer.control?.(cmd.action, cmd.value);
+          const prevCode = codeCacheRef.current.get(id);
+          if (prevCode !== scene.code) {
+            entry.renderer.setCode(scene.code);
+            codeCacheRef.current.set(id, scene.code);
+            for (const cmd of controlCacheRef.current.get(id) ?? []) {
+              entry.renderer.control?.(cmd.action, cmd.value);
+            }
+          }
+
+          if (scene.type === "video" && scene.videoSync) {
+            entry.renderer.control?.("syncSettings", {
+              enabled: scene.videoSync.enabled,
+              measuresPerLoop: scene.videoSync.measuresPerLoop,
+              bpm: stateRef.current.audio.bpm || 120,
+            });
           }
         }
-
-        if (scene.type === "video" && scene.videoSync) {
-          entry.renderer.control?.("syncSettings", {
-            enabled: scene.videoSync.enabled,
-            measuresPerLoop: scene.videoSync.measuresPerLoop,
-            bpm: stateRef.current.audio.bpm || 120,
-          });
-        }
-      }
+      })();
     });
 
     const unlistenVideoCmd = listenVideoCmd(({ sceneId, action, value }) => {
@@ -248,6 +287,8 @@ export function useEngine(opts: UseEngineOptions) {
 
     return () => {
       running = false;
+      disposedRef.current = true;
+      syncVersionRef.current++;
       cancelAnimationFrame(rafRef.current);
       unlistenState.then((fn) => fn());
       unlistenVideoCmd.then((fn) => fn());
@@ -256,6 +297,7 @@ export function useEngine(opts: UseEngineOptions) {
         e.canvas.remove();
       }
       renderersRef.current.clear();
+      loadingRenderersRef.current.clear();
       codeCacheRef.current.clear();
       controlCacheRef.current.clear();
       compositorRef.current?.destroy();

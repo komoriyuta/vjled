@@ -71,10 +71,10 @@ impl MultiDeviceLEDController {
                     }
                     pixels.push((*r, *g, *b));
                 } else if start_local.is_some() {
-                    if !pixels.is_empty() {
+                    if let Some(start) = start_local {
                         proto.send_set_pixel_range_to(
                             device.device_id,
-                            start_local.unwrap() as u16,
+                            start as u16,
                             &pixels,
                             &device.controller_ip,
                             port,
@@ -85,10 +85,10 @@ impl MultiDeviceLEDController {
                 }
             }
 
-            if !pixels.is_empty() {
+            if let Some(start) = start_local {
                 proto.send_set_pixel_range_to(
                     device.device_id,
-                    start_local.unwrap() as u16,
+                    start as u16,
                     &pixels,
                     &device.controller_ip,
                     port,
