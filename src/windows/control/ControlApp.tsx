@@ -1,58 +1,64 @@
-import { useEffect, useRef, useCallback, useState } from "react";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
-import { useVJStore } from "../../stores/vjStore";
-import { useLedStore } from "../../stores/ledStore";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Editor from "@monaco-editor/react";
 import { useAiStore } from "../../stores/aiStore";
-import { useEngine } from "../../hooks/useEngine";
-import {
-  useAudioAnalysis,
-  listAudioDevices,
-  type RustAudioDevice,
-} from "../../hooks/useAudioAnalysis";
-import type { AudioAnalysis, Scene, SceneType, BusLabel } from "../../types";
+import { useLedStore } from "../../stores/ledStore";
+import { useVJStore } from "../../stores/vjStore";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
-import Editor from "@monaco-editor/react";
+import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
+import { useEngine } from "../../hooks/useEngine";
+import type { AudioAnalysis, BusLabel, Scene, SceneType, VideoSync } from "../../types";
 import LedPanel from "../../components/LedPanel";
-
-const BG = "#090b10";
-const SURFACE = "#10141d";
-const SURFACE2 = "#171d28";
-const SURFACE3 = "#202838";
-const ACCENT = "#22d3ee";
-const ACCENT2 = "#fb7185";
-const TEXT = "#eef2ff";
-const TEXT2 = "#94a3b8";
-const BORDER = "#283244";
-const OK = "#34d399";
+import {
+  chooseProjectLoadPath,
+  chooseProjectSavePath,
+  chooseVideoPath,
+  loadProjectFile,
+  openLedMappingWindow,
+  resolveVideoUrl,
+  saveProject,
+  toggleOutputDecorations as toggleTauriOutputDecorations,
+} from "./tauriClient";
+import "./control.css";
 
 const typeColors: Record<SceneType, string> = {
   glsl: "#ef4444",
   p5: "#38bdf8",
-  threejs: "#22c55e",
+  threejs: "#34d399",
   video: "#f59e0b",
 };
 
-type RightTab = "project" | "output" | "audio" | "ai" | "led";
+type Workspace = "perform" | "project" | "output" | "audio" | "ai" | "led";
 
-function formatTime(s: number): string {
-  if (!isFinite(s) || s < 0) return "0:00";
-  const m = Math.floor(s / 60);
-  const sec = Math.floor(s % 60);
-  return `${m}:${sec.toString().padStart(2, "0")}`;
+interface ProjectFile {
+  version: number;
+  vj: unknown;
+  led?: { config: unknown; calibrationPoints: unknown };
 }
 
 export default function ControlApp() {
   const {
-    scenes, busA, busB, crossfade, isPlaying,
+    scenes,
+    busA,
+    busB,
+    crossfade,
+    isPlaying,
     selectedSceneId,
-    addScene, removeScene, updateSceneCode,
-    setBusA, setBusB, setCrossfade,
-    cutToA, cutToB, fadeToA, fadeToB,
-    setPlaying, selectScene, setVideoSync,
+    addScene,
+    removeScene,
+    updateSceneCode,
+    setBusA,
+    setBusB,
+    setCrossfade,
+    cutToA,
+    cutToB,
+    fadeToA,
+    fadeToB,
+    setPlaying,
+    selectScene,
+    setVideoSync,
   } = useVJStore();
+
   useAudioAnalysis();
 
   const loadProject = useVJStore((s) => s.loadProject);
@@ -67,9 +73,17 @@ export default function ControlApp() {
   const busACanvasRef = useRef<HTMLCanvasElement>(null);
   const busBCanvasRef = useRef<HTMLCanvasElement>(null);
   const selectedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const contextSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const codeSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
+  const scenePreviewCanvasesRef = useRef<Map<string, HTMLCanvasElement | null>>(new Map());
   const ledFrameRef = useRef(0);
+  const selectedPreviewRefs = useMemo(
+    () => [contextSelectedCanvasRef, codeSelectedCanvasRef],
+    [],
+  );
+
+  const [workspace, setWorkspace] = useState<Workspace>("perform");
   const [outputDecorated, setOutputDecorated] = useState(false);
-  const [rightTab, setRightTab] = useState<RightTab>("output");
   const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
 
   const aiConfig = useAiStore((s) => s.config);
@@ -84,39 +98,33 @@ export default function ControlApp() {
     busAPreviewRef: busACanvasRef,
     busBPreviewRef: busBCanvasRef,
     selectedPreviewRef: selectedCanvasRef,
+    selectedPreviewRefs,
+    scenePreviewCanvasesRef,
   });
 
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
   const busAScene = scenes.find((s) => s.id === busA);
   const busBScene = scenes.find((s) => s.id === busB);
-  const monacoLang = selectedScene?.type === "glsl" ? "cpp" : "javascript";
 
   const handleSave = useCallback(async () => {
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Project", extensions: ["vjled.json"] }],
-        defaultPath: "project.vjled.json",
-      });
-      if (!selected) return;
+      const path = await chooseProjectSavePath();
+      if (!path) return;
       const state = useVJStore.getState();
       const led = useLedStore.getState();
-      await invoke("project_save", {
-        path: selected as string,
-        data: {
-          version: 1,
-          vj: {
-            scenes: state.scenes,
-            busA: state.busA,
-            busB: state.busB,
-            crossfade: state.crossfade,
-            isPlaying: state.isPlaying,
-            selectedSceneId: state.selectedSceneId,
-          },
-          led: {
-            config: led.config,
-            calibrationPoints: led.calibrationPoints,
-          },
+      await saveProject(path, {
+        version: 1,
+        vj: {
+          scenes: state.scenes,
+          busA: state.busA,
+          busB: state.busB,
+          crossfade: state.crossfade,
+          isPlaying: state.isPlaying,
+          selectedSceneId: state.selectedSceneId,
+        },
+        led: {
+          config: led.config,
+          calibrationPoints: led.calibrationPoints,
         },
       });
     } catch (e) {
@@ -126,12 +134,9 @@ export default function ControlApp() {
 
   const handleLoad = useCallback(async () => {
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Project", extensions: ["vjled.json", "json"] }],
-      });
-      if (!selected) return;
-      const project = await invoke<{ version: number; vj: unknown; led?: { config: unknown; calibrationPoints: unknown } }>("project_load", { path: selected as string });
+      const path = await chooseProjectLoadPath();
+      if (!path) return;
+      const project = await loadProjectFile<ProjectFile>(path);
       if (project.vj) loadProject(project.vj as any);
       if (project.led) {
         ledLoadProject(
@@ -144,52 +149,38 @@ export default function ControlApp() {
     }
   }, [loadProject, ledLoadProject]);
 
-  const handleAiGenerate = useCallback(async (sceneType: SceneType, prompt: string) => {
-    try {
-      const code = await aiGenerate(sceneType, prompt);
-      addScene(sceneType);
-      const state = useVJStore.getState();
-      const newScene = state.scenes[state.scenes.length - 1];
-      if (newScene) {
-        updateSceneCode(newScene.id, code);
-        selectScene(newScene.id);
-      }
-    } catch {}
-  }, [aiGenerate, addScene, updateSceneCode, selectScene]);
+  const handleAiGenerate = useCallback(
+    async (sceneType: SceneType, prompt: string) => {
+      try {
+        const code = await aiGenerate(sceneType, prompt);
+        addScene(sceneType);
+        const currentScenes = useVJStore.getState().scenes;
+        const nextScene = currentScenes[currentScenes.length - 1];
+        if (nextScene) {
+          updateSceneCode(nextScene.id, code);
+          selectScene(nextScene.id);
+        }
+      } catch {}
+    },
+    [aiGenerate, addScene, updateSceneCode, selectScene],
+  );
 
-  const handleAiEdit = useCallback(async (prompt: string) => {
-    if (!selectedScene) return;
-    try {
-      const code = await aiGenerate(selectedScene.type, prompt, selectedScene.code);
-      updateSceneCode(selectedScene.id, code);
-    } catch {}
-  }, [aiGenerate, selectedScene, updateSceneCode]);
+  const handleAiEdit = useCallback(
+    async (prompt: string) => {
+      if (!selectedScene) return;
+      try {
+        const code = await aiGenerate(selectedScene.type, prompt, selectedScene.code);
+        updateSceneCode(selectedScene.id, code);
+      } catch {}
+    },
+    [aiGenerate, selectedScene, updateSceneCode],
+  );
 
   const openLedMapping = useCallback(async () => {
     try {
-      const existing = await WebviewWindow.getByLabel("led-mapping");
-      if (existing) {
-        await existing.show();
-        await existing.unminimize();
-        await existing.setFocus();
-        setLedMappingStatus("Calibration window focused");
-        return;
-      }
       setLedMappingStatus("Opening calibration window...");
-      const win = new WebviewWindow("led-mapping", {
-        url: "/led-mapping.html",
-        title: "VJLED - LED Calibration",
-        width: 1280,
-        height: 720,
-        decorations: true,
-        resizable: true,
-        focus: true,
-      });
-      win.once("tauri://created", () => setLedMappingStatus("Calibration window open"));
-      win.once("tauri://error", (e) => {
-        console.error("LED Mapping window error:", e);
-        setLedMappingStatus(`Failed to open calibration window: ${String(e.payload)}`);
-      });
+      const status = await openLedMappingWindow();
+      setLedMappingStatus(status === "focused" ? "Calibration window focused" : "Calibration window open");
     } catch (e) {
       setLedMappingStatus(`Failed to open calibration window: ${String(e)}`);
     }
@@ -220,7 +211,7 @@ export default function ControlApp() {
       running = false;
       cancelAnimationFrame(ledFrameRef.current);
     };
-  }, [ledConfig.enabled, ledPoints, ledConfig]);
+  }, [ledConfig.enabled, ledConfig, ledPoints]);
 
   useEffect(() => {
     const publishState = () => {
@@ -246,254 +237,404 @@ export default function ControlApp() {
     };
   }, []);
 
-  const handleCodeChange = useCallback(
-    (value: string | undefined) => {
-      if (selectedSceneId && value !== undefined) {
-        updateSceneCode(selectedSceneId, value);
-      }
+  const assignScene = useCallback(
+    (sceneId: string, bus: BusLabel) => {
+      if (bus === "A") setBusA(sceneId);
+      else setBusB(sceneId);
     },
-    [selectedSceneId, updateSceneCode],
+    [setBusA, setBusB],
   );
 
-  function assignScene(sceneId: string, bus: BusLabel) {
-    if (bus === "A") setBusA(sceneId);
-    else setBusB(sceneId);
-  }
-
-  async function toggleOutputDecorations() {
+  const toggleOutputDecorations = useCallback(async () => {
     try {
-      const appWindow = await WebviewWindow.getByLabel("output");
-      if (!appWindow) return;
-      const current = await appWindow.isDecorated();
-      await appWindow.setDecorations(!current);
-      setOutputDecorated(!current);
+      const decorated = await toggleTauriOutputDecorations();
+      if (decorated !== null) setOutputDecorated(decorated);
     } catch (e) {
       console.error("Failed to toggle decorations:", e);
     }
-  }
+  }, []);
 
-  async function pickVideoFile() {
+  const pickVideoFile = useCallback(async () => {
     if (!selectedSceneId) return;
     try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Video", extensions: ["mp4", "webm", "mov", "avi", "mkv", "ogv"] }],
-      });
-      if (selected) {
-        const port = await invoke<number>("get_video_server_port");
-        const url = `http://127.0.0.1:${port}/${selected as string}`;
-        updateSceneCode(selectedSceneId, url);
-      }
-    } catch {}
+      const path = await chooseVideoPath();
+      if (!path) return;
+      updateSceneCode(selectedSceneId, await resolveVideoUrl(path));
+    } catch (e) {
+      console.error("Video selection failed:", e);
+    }
+  }, [selectedSceneId, updateSceneCode]);
+
+  return (
+    <div className="control-shell">
+      <TopBar isPlaying={isPlaying} audio={audio} onTogglePlay={() => setPlaying(!isPlaying)} />
+      <div className="app-grid">
+        <SideNav workspace={workspace} onChange={setWorkspace} />
+        <ContextPanel
+          workspace={workspace}
+          scenes={scenes}
+          selectedScene={selectedScene}
+          selectedSceneId={selectedSceneId}
+          busA={busA}
+          busB={busB}
+          selectedCanvasRef={contextSelectedCanvasRef}
+          onAddScene={addScene}
+          onAssignScene={assignScene}
+          onDeleteScene={removeScene}
+          onSelectScene={selectScene}
+          onScenePreviewRef={(sceneId, canvas) => {
+            if (canvas) scenePreviewCanvasesRef.current.set(sceneId, canvas);
+            else scenePreviewCanvasesRef.current.delete(sceneId);
+          }}
+        />
+        <MainWorkspace
+          workspace={workspace}
+          scenes={scenes}
+          selectedScene={selectedScene}
+          busAScene={busAScene}
+          busBScene={busBScene}
+          crossfade={crossfade}
+          isPlaying={isPlaying}
+          audio={audio}
+          outputDecorated={outputDecorated}
+          ledMappingStatus={ledMappingStatus}
+          aiConfig={aiConfig}
+          aiGenerating={aiGenerating}
+          aiError={aiError}
+          outputPreviewRef={outputPreviewRef}
+          busACanvasRef={busACanvasRef}
+          busBCanvasRef={busBCanvasRef}
+          selectedCanvasRef={selectedCanvasRef}
+          codeSelectedCanvasRef={codeSelectedCanvasRef}
+          onCutA={cutToA}
+          onCutB={cutToB}
+          onFadeA={fadeToA}
+          onFadeB={fadeToB}
+          onCrossfade={setCrossfade}
+          onSave={handleSave}
+          onLoad={handleLoad}
+          onToggleOutputDecorations={toggleOutputDecorations}
+          onOpenLedMapping={openLedMapping}
+          onToggleAudio={setAudioEnabled}
+          onAudioDevice={setAudioDevice}
+          onAiGenerate={handleAiGenerate}
+          onAiEdit={selectedScene ? handleAiEdit : undefined}
+          onAiConfigChange={aiSetConfig}
+          onCodeChange={(code) => selectedScene && updateSceneCode(selectedScene.id, code)}
+          onPickVideo={pickVideoFile}
+          sendCommand={sendCommand}
+          getVideoInfo={getVideoInfo}
+          onVideoSyncChange={(sync) => selectedScene && setVideoSync(selectedScene.id, sync)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ isPlaying, audio, onTogglePlay }: { isPlaying: boolean; audio: AudioAnalysis; onTogglePlay: () => void }) {
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <span className="brand__mark">VJLED</span>
+        <span className="brand__sub">CONTROL</span>
+      </div>
+      <div className="topbar__status">
+        <span className="status-chip"><span className={`status-dot ${isPlaying ? "is-live" : ""}`} />{isPlaying ? "LIVE" : "PAUSED"}</span>
+        <span className="status-chip">{audio.bpm ? `${audio.bpm.toFixed(1)} BPM` : "NO BPM"}</span>
+        <span className="status-chip">{audio.permission.toUpperCase()}</span>
+      </div>
+      <button className={`button ${isPlaying ? "is-primary" : ""}`} onClick={onTogglePlay}>{isPlaying ? "Pause" : "Go Live"}</button>
+    </header>
+  );
+}
+
+function SideNav({ workspace, onChange }: { workspace: Workspace; onChange: (workspace: Workspace) => void }) {
+  const items: { id: Workspace; label: string; icon: string }[] = [
+    { id: "perform", label: "Run", icon: "P" },
+    { id: "project", label: "Project", icon: "J" },
+    { id: "output", label: "Output", icon: "O" },
+    { id: "audio", label: "Audio", icon: "A" },
+    { id: "ai", label: "AI/Code", icon: "C" },
+    { id: "led", label: "LED", icon: "L" },
+  ];
+
+  return (
+    <nav className="side-nav" aria-label="Workspace">
+      <div className="unit-badge">01</div>
+      {items.map((item) => (
+        <button key={item.id} className={`side-tab ${workspace === item.id ? "is-active" : ""}`} onClick={() => onChange(item.id)}>
+          <span className="side-tab__icon">{item.icon}</span>
+          <span>{item.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function ContextPanel(props: {
+  workspace: Workspace;
+  scenes: Scene[];
+  selectedScene: Scene | null;
+  selectedSceneId: string | null;
+  busA: string | null;
+  busB: string | null;
+  selectedCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  onAddScene: (type: SceneType) => void;
+  onAssignScene: (sceneId: string, bus: BusLabel) => void;
+  onDeleteScene: (id: string) => void;
+  onScenePreviewRef: (sceneId: string, canvas: HTMLCanvasElement | null) => void;
+  onSelectScene: (id: string | null) => void;
+}) {
+  return (
+    <aside className="context-panel">
+      <ModuleHeader title="Scenes" meta={`${props.scenes.length} SRC`} />
+      <div className="context-preview">
+        <PreviewFrame title="Selected" meta={props.selectedScene?.name ?? "none"} tone={props.selectedScene ? typeColors[props.selectedScene.type] : "var(--dim)"}>
+          <canvas ref={props.selectedCanvasRef} width={480} height={270} />
+        </PreviewFrame>
+      </div>
+      <SceneLibrary {...props} />
+    </aside>
+  );
+}
+
+function SceneLibrary({ scenes, selectedSceneId, busA, busB, onAddScene, onAssignScene, onDeleteScene, onScenePreviewRef, onSelectScene }: Omit<Parameters<typeof ContextPanel>[0], "workspace" | "selectedScene" | "selectedCanvasRef">) {
+  return (
+    <>
+      <div className="scene-list">
+        {scenes.map((scene) => (
+          <SceneCard
+            key={scene.id}
+            scene={scene}
+            selected={selectedSceneId === scene.id}
+            onA={busA === scene.id}
+            onB={busB === scene.id}
+            onSelect={() => onSelectScene(scene.id)}
+            onDelete={() => onDeleteScene(scene.id)}
+            onAssign={(bus) => onAssignScene(scene.id, bus)}
+            onPreviewRef={(canvas) => onScenePreviewRef(scene.id, canvas)}
+          />
+        ))}
+        {scenes.length === 0 && <EmptyState>Select a source type below.</EmptyState>}
+      </div>
+      <div className="source-buttons">
+        {(Object.keys(typeColors) as SceneType[]).map((type) => (
+          <button key={type} className="button is-active" style={{ "--active": typeColors[type] } as React.CSSProperties} onClick={() => onAddScene(type)}>
+            + {sceneTypeLabel(type)}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function MainWorkspace(props: {
+  workspace: Workspace;
+  scenes: Scene[];
+  selectedScene: Scene | null;
+  busAScene: Scene | undefined;
+  busBScene: Scene | undefined;
+  crossfade: number;
+  isPlaying: boolean;
+  audio: AudioAnalysis;
+  outputDecorated: boolean;
+  ledMappingStatus: string;
+  aiConfig: { baseUrl: string; apiKey: string; model: string };
+  aiGenerating: boolean;
+  aiError: string | null;
+  outputPreviewRef: React.RefObject<HTMLDivElement | null>;
+  busACanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  busBCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  selectedCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  codeSelectedCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  onCutA: () => void;
+  onCutB: () => void;
+  onFadeA: () => void;
+  onFadeB: () => void;
+  onCrossfade: (value: number) => void;
+  onSave: () => void;
+  onLoad: () => void;
+  onToggleOutputDecorations: () => void;
+  onOpenLedMapping: () => void;
+  onToggleAudio: (enabled: boolean) => void;
+  onAudioDevice: (deviceId: string, label?: string) => void;
+  onAiGenerate: (type: SceneType, prompt: string) => void;
+  onAiEdit?: (prompt: string) => void;
+  onAiConfigChange: (config: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
+  onCodeChange: (code: string) => void;
+  onPickVideo: () => void;
+  sendCommand: (id: string, action: string, value: unknown) => void;
+  getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number; bpmLoop: boolean; beatsPerLoop: number } | null;
+  onVideoSyncChange: (sync: VideoSync) => void;
+}) {
+  if (props.workspace === "ai") {
+    return <AiCodeWorkspace {...props} />;
   }
 
-  const canvasStyle: React.CSSProperties = {
-    maxWidth: "100%",
-    maxHeight: "100%",
-    objectFit: "contain",
-    display: "block",
-    borderRadius: 8,
-  };
-
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "220px minmax(420px, 1fr) 300px", height: "100vh", overflow: "hidden", background: BG, color: TEXT, fontFamily: "Avenir Next, ui-sans-serif, system-ui, sans-serif", fontSize: 13 }}>
-      <aside style={{ borderRight: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
-        <PanelHeader title="Scenes" subtitle={`${scenes.length} sources`} />
-        <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
-          {scenes.map((scene) => (
-            <SceneItem
-              key={scene.id}
-              scene={scene}
-              selected={selectedSceneId === scene.id}
-              onA={busA === scene.id}
-              onB={busB === scene.id}
-              onSelect={() => selectScene(scene.id)}
-              onDelete={() => removeScene(scene.id)}
-              onAssign={(bus) => assignScene(scene.id, bus)}
-            />
-          ))}
-          {scenes.length === 0 && (
-            <EmptyState title="No scenes" body="Create GLSL, p5, Three.js, or Video sources from the bottom bar." />
-          )}
+    <main className="main-workspace">
+      <PerformanceStage {...props} />
+      <FeaturePanel {...props} />
+    </main>
+  );
+}
+
+function PerformanceStage(props: {
+  selectedScene: Scene | null;
+  busAScene: Scene | undefined;
+  busBScene: Scene | undefined;
+  crossfade: number;
+  outputPreviewRef: React.RefObject<HTMLDivElement | null>;
+  busACanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  busBCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  selectedCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  onCutA: () => void;
+  onCutB: () => void;
+  onFadeA: () => void;
+  onFadeB: () => void;
+  onCrossfade: (value: number) => void;
+}) {
+  return (
+    <section className="stage">
+      <PreviewFrame title="Program Output" meta={outputMeta(props.busAScene, props.busBScene, props.crossfade)} tone="var(--cyan)" program>
+        <div ref={props.outputPreviewRef} className="render-mount" />
+      </PreviewFrame>
+      <div className="bus-row">
+        <PreviewFrame title="Bus A" meta={props.busAScene?.name ?? "empty"} tone="var(--cyan)">
+          <canvas ref={props.busACanvasRef} width={480} height={270} />
+        </PreviewFrame>
+        <PreviewFrame title="Bus B" meta={props.busBScene?.name ?? "empty"} tone="var(--rose)">
+          <canvas ref={props.busBCanvasRef} width={480} height={270} />
+        </PreviewFrame>
+        <PreviewFrame title="Selected" meta={props.selectedScene?.name ?? "none"} tone={props.selectedScene ? typeColors[props.selectedScene.type] : "var(--dim)"}>
+          <canvas ref={props.selectedCanvasRef} width={480} height={270} />
+        </PreviewFrame>
+      </div>
+      <TransportPanel crossfade={props.crossfade} onCutA={props.onCutA} onCutB={props.onCutB} onFadeA={props.onFadeA} onFadeB={props.onFadeB} onCrossfade={props.onCrossfade} />
+    </section>
+  );
+}
+
+function FeaturePanel(props: Parameters<typeof MainWorkspace>[0]) {
+  if (props.workspace === "project") {
+    return <ProjectPanel onSave={props.onSave} onLoad={props.onLoad} scenes={props.scenes} selectedScene={props.selectedScene} />;
+  }
+  if (props.workspace === "output") {
+    return <OutputPanel {...props} />;
+  }
+  if (props.workspace === "audio") {
+    return <AudioPanel audio={props.audio} onToggle={props.onToggleAudio} onDevice={props.onAudioDevice} />;
+  }
+  if (props.workspace === "led") {
+    return <LedWorkspace onOpenLedMapping={props.onOpenLedMapping} ledMappingStatus={props.ledMappingStatus} />;
+  }
+  return <PerformanceSummary selectedScene={props.selectedScene} busAScene={props.busAScene} busBScene={props.busBScene} crossfade={props.crossfade} />;
+}
+
+function TransportPanel({ crossfade, onCutA, onCutB, onFadeA, onFadeB, onCrossfade }: {
+  crossfade: number;
+  onCutA: () => void;
+  onCutB: () => void;
+  onFadeA: () => void;
+  onFadeB: () => void;
+  onCrossfade: (value: number) => void;
+}) {
+  return (
+    <div className="transport">
+      <div className="transport__group">
+        <button className="button" onClick={onCutA}>Cut A</button>
+        <button className="button" onClick={onFadeA}>Fade A</button>
+      </div>
+      <div className="xfade">
+        <div className="xfade__labels">
+          <span>A</span>
+          <span>{(crossfade * 100).toFixed(0)}%</span>
+          <span>B</span>
         </div>
-        <div style={{ padding: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, borderTop: `1px solid ${BORDER}` }}>
-          {(Object.keys(typeColors) as SceneType[]).map((type) => (
-            <button key={type} onClick={() => addScene(type)} style={{ ...buttonBase, background: typeColors[type], borderColor: typeColors[type], color: "#fff" }}>
-              + {type === "threejs" ? "Three" : type.toUpperCase()}
-            </button>
-          ))}
+        <input className="range" type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => onCrossfade(parseFloat(e.target.value))} />
+      </div>
+      <div className="transport__group">
+        <button className="button" onClick={onFadeB}>Fade B</button>
+        <button className="button" onClick={onCutB}>Cut B</button>
+      </div>
+    </div>
+  );
+}
+
+function AiCodeWorkspace(props: Parameters<typeof MainWorkspace>[0]) {
+  return (
+    <main className="ai-code-workspace">
+      <section className="ai-panel">
+        <AiPanel
+          generating={props.aiGenerating}
+          error={props.aiError}
+          onGenerate={props.onAiGenerate}
+          onEdit={props.onAiEdit}
+          config={props.aiConfig}
+          onConfigChange={props.onAiConfigChange}
+          selectedScene={props.selectedScene}
+        />
+      </section>
+      <section className="code-panel">
+        <div className="panel-header">
+          <SectionTitle>{props.selectedScene ? `Code: ${props.selectedScene.name}` : "Code"}</SectionTitle>
+          {props.selectedScene && <span className="scene-card__badge" style={{ color: typeColors[props.selectedScene.type] }}>{props.selectedScene.type}</span>}
         </div>
-      </aside>
-
-      <main style={{ display: "grid", gridTemplateRows: "minmax(230px, 42vh) 118px 82px minmax(180px, 1fr)", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
-        <section style={{ padding: 12, minHeight: 0 }}>
-          <PreviewFrame title="Program Output" meta={outputMeta(busAScene, busBScene, crossfade)} tone={ACCENT}>
-            <div ref={outputPreviewRef} style={{ width: "100%", height: "100%", minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center" }} />
+        <div className="code-preview">
+          <PreviewFrame title="Selected Preview" meta={props.selectedScene?.name ?? "none"} tone={props.selectedScene ? typeColors[props.selectedScene.type] : "var(--dim)"}>
+            <canvas ref={props.codeSelectedCanvasRef} width={480} height={270} />
           </PreviewFrame>
-        </section>
-
-        <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, padding: "0 12px 10px", minHeight: 0 }}>
-          <PreviewFrame title="Bus A" meta={busAScene?.name ?? "empty"} tone={ACCENT}>
-            <canvas ref={busACanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewFrame>
-          <PreviewFrame title="Bus B" meta={busBScene?.name ?? "empty"} tone={ACCENT2}>
-            <canvas ref={busBCanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewFrame>
-          <PreviewFrame title="Selected" meta={selectedScene?.name ?? "none"} tone={selectedScene ? typeColors[selectedScene.type] : TEXT2}>
-            <canvas ref={selectedCanvasRef} width={480} height={270} style={canvasStyle} />
-          </PreviewFrame>
-        </section>
-
-        <section style={{ padding: "0 12px 10px" }}>
-          <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 12, display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 12, alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 6 }}>
-              <VJButton onClick={cutToA}>CUT A</VJButton>
-              <VJButton onClick={fadeToA}>FADE A</VJButton>
-            </div>
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", color: TEXT2, fontWeight: 800, fontSize: 10, letterSpacing: 1, textTransform: "uppercase", marginBottom: 5 }}>
-                <span style={{ color: ACCENT }}>A</span>
-                <span>Crossfade {(crossfade * 100).toFixed(0)}%</span>
-                <span style={{ color: ACCENT2 }}>B</span>
-              </div>
-              <input type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => setCrossfade(parseFloat(e.target.value))} style={{ width: "100%", accentColor: ACCENT }} />
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <VJButton onClick={fadeToB}>FADE B</VJButton>
-              <VJButton onClick={cutToB}>CUT B</VJButton>
-              <VJButton onClick={() => setPlaying(!isPlaying)} accent={isPlaying}>{isPlaying ? "PAUSE" : "PLAY"}</VJButton>
-            </div>
-          </div>
-        </section>
-
-        <section style={{ padding: "0 12px 12px", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <SectionTitle title={selectedScene ? `Edit ${selectedScene.name}` : "Editor"} />
-            {selectedScene && <span style={{ color: typeColors[selectedScene.type], fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>{selectedScene.type}</span>}
-          </div>
-          <div style={{ flex: 1, borderRadius: 12, overflow: "hidden", border: `1px solid ${BORDER}`, minHeight: 0 }}>
-            {selectedScene ? (
-              selectedScene.type === "video" ? (
-                <VideoEditor scene={selectedScene} audio={audio} onPick={pickVideoFile} sendCommand={sendCommand} getVideoInfo={getVideoInfo} onSyncChange={(sync) => setVideoSync(selectedScene.id, sync)} />
-              ) : (
-                <Editor
-                  height="100%"
-                  language={monacoLang}
-                  theme="vs-dark"
-                  value={selectedScene.code}
-                  onChange={handleCodeChange}
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 13,
-                    lineNumbers: "on",
-                    scrollBeyondLastLine: false,
-                    wordWrap: "on",
-                    tabSize: 2,
-                    automaticLayout: true,
-                    padding: { top: 10 },
-                  }}
-                />
-              )
+        </div>
+        <div className="code-editor">
+          {props.selectedScene ? (
+            props.selectedScene.type === "video" ? (
+              <VideoEditor scene={props.selectedScene} audio={props.audio} onPick={props.onPickVideo} sendCommand={props.sendCommand} getVideoInfo={props.getVideoInfo} onSyncChange={props.onVideoSyncChange} />
             ) : (
-              <EmptyState title="Select a scene" body="The selected source preview and editor will appear here." dark />
-            )}
-          </div>
-        </section>
-      </main>
-
-      <aside style={{ borderLeft: `1px solid ${BORDER}`, display: "flex", flexDirection: "column", minHeight: 0, background: SURFACE }}>
-        <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}` }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-            {(["project", "output", "audio", "ai", "led"] as RightTab[]).map((tab) => (
-              <button key={tab} onClick={() => setRightTab(tab)} style={{ ...buttonBase, background: rightTab === tab ? ACCENT : SURFACE2, borderColor: rightTab === tab ? ACCENT : BORDER, color: rightTab === tab ? "#001018" : TEXT2 }}>
-                {tab.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-          {rightTab === "project" && <ProjectPanel onSave={handleSave} onLoad={handleLoad} scenes={scenes} selectedScene={selectedScene} />}
-          {rightTab === "output" && (
-            <OutputPanel
-              busAScene={busAScene}
-              busBScene={busBScene}
-              crossfade={crossfade}
-              isPlaying={isPlaying}
-              outputDecorated={outputDecorated}
-              onToggleDecorations={toggleOutputDecorations}
-              onOpenLedMapping={openLedMapping}
-              ledMappingStatus={ledMappingStatus}
-            />
-          )}
-          {rightTab === "audio" && (
-            <AudioPanel
-              audio={audio}
-              onToggle={setAudioEnabled}
-              onDevice={(id, label) => setAudioDevice(id, label)}
-            />
-          )}
-          {rightTab === "ai" && (
-            <AiPanel
-              generating={aiGenerating}
-              error={aiError}
-              onGenerate={handleAiGenerate}
-              onEdit={selectedScene ? handleAiEdit : undefined}
-              config={aiConfig}
-              onConfigChange={aiSetConfig}
-              selectedScene={selectedScene}
-            />
-          )}
-          {rightTab === "led" && (
-            <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-              <div style={{ padding: 10, borderBottom: `1px solid ${BORDER}`, background: SURFACE2 }}>
-                <SectionTitle title="LED Projection" />
-                <p style={helpText}>Single-camera mapping is used here. Python's second source camera is intentionally replaced by the VJ program output canvas.</p>
-                <button onClick={openLedMapping} style={{ ...buttonBase, width: "100%", marginTop: 8, background: SURFACE3, color: TEXT }}>
-                  Open Calibration Window
-                </button>
-                <div style={{ marginTop: 6, color: TEXT2, fontSize: 10 }}>{ledMappingStatus}</div>
-              </div>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <LedPanel />
-              </div>
-            </div>
+              <Editor
+                height="100%"
+                language={props.selectedScene.type === "glsl" ? "cpp" : "javascript"}
+                theme="vs-dark"
+                value={props.selectedScene.code}
+                onChange={(value) => value !== undefined && props.onCodeChange(value)}
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  lineNumbers: "on",
+                  scrollBeyondLastLine: false,
+                  wordWrap: "on",
+                  tabSize: 2,
+                  automaticLayout: true,
+                  padding: { top: 10 },
+                }}
+              />
+            )
+          ) : (
+            <EmptyState>Select a scene to edit code.</EmptyState>
           )}
         </div>
-      </aside>
-    </div>
+      </section>
+    </main>
   );
 }
 
-function outputMeta(a: Scene | undefined, b: Scene | undefined, crossfade: number): string {
-  if (!a && !b) return "no buses assigned";
-  if (crossfade <= 0.01) return a?.name ?? "Bus A empty";
-  if (crossfade >= 0.99) return b?.name ?? "Bus B empty";
-  return `${a?.name ?? "empty"} + ${b?.name ?? "empty"}`;
-}
-
-function PanelHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+function ModuleHeader({ title, meta }: { title: string; meta?: string }) {
   return (
-    <div style={{ padding: 12, borderBottom: `1px solid ${BORDER}` }}>
-      <div style={{ fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase", fontSize: 12 }}>{title}</div>
-      {subtitle && <div style={{ marginTop: 3, color: TEXT2, fontSize: 11 }}>{subtitle}</div>}
+    <div className="module-header">
+      <span className="module-title">{title}</span>
+      {meta && <span className="module-meta">{meta}</span>}
     </div>
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
-  return <div style={{ color: TEXT, fontWeight: 900, fontSize: 11, textTransform: "uppercase", letterSpacing: 1.2 }}>{title}</div>;
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <div className="module-title">{children}</div>;
 }
 
-function EmptyState({ title, body, dark }: { title: string; body: string; dark?: boolean }) {
-  return (
-    <div style={{ height: "100%", minHeight: 90, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 14, background: dark ? "#1e1e1e" : "transparent" }}>
-      <div style={{ color: TEXT, fontWeight: 800, fontSize: 12 }}>{title}</div>
-      <div style={{ color: TEXT2, fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>{body}</div>
-    </div>
-  );
+function EmptyState({ children }: { children: React.ReactNode }) {
+  return <div className="empty-state"><p className="help">{children}</p></div>;
 }
 
-function SceneItem({ scene, selected, onA, onB, onSelect, onDelete, onAssign }: {
+function SceneCard({ scene, selected, onA, onB, onSelect, onDelete, onAssign, onPreviewRef }: {
   scene: Scene;
   selected: boolean;
   onA: boolean;
@@ -501,68 +642,76 @@ function SceneItem({ scene, selected, onA, onB, onSelect, onDelete, onAssign }: 
   onSelect: () => void;
   onDelete: () => void;
   onAssign: (bus: BusLabel) => void;
+  onPreviewRef: (canvas: HTMLCanvasElement | null) => void;
 }) {
   return (
-    <div onClick={onSelect} style={{ padding: 9, marginBottom: 7, borderRadius: 12, cursor: "pointer", background: selected ? SURFACE3 : SURFACE2, border: `1px solid ${selected ? typeColors[scene.type] : BORDER}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: typeColors[scene.type], flexShrink: 0 }} />
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 800 }}>{scene.name}</span>
-        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ ...iconButton, color: TEXT2 }} title="Delete">x</button>
+    <div className={`scene-card ${selected ? "is-selected" : ""}`} style={{ "--type": typeColors[scene.type] } as React.CSSProperties} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}>
+      <div className="scene-card__preview">
+        <canvas ref={onPreviewRef} width={192} height={108} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
-        <BusButton label="A" active={onA} color={ACCENT} onClick={(e) => { e.stopPropagation(); onAssign("A"); }} />
-        <BusButton label="B" active={onB} color={ACCENT2} onClick={(e) => { e.stopPropagation(); onAssign("B"); }} />
+      <div className="scene-card__top">
+        <span className="scene-card__led" />
+        <span className="scene-card__name">{scene.name}</span>
+        <span className="scene-card__badge">{scene.type}</span>
+      </div>
+      <div className="scene-card__actions">
+        <button className={`button ${onA ? "is-active" : ""}`} style={{ "--active": "var(--cyan)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("A"); }}>A</button>
+        <button className={`button ${onB ? "is-active" : ""}`} style={{ "--active": "var(--rose)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("B"); }}>B</button>
+        <button className="button is-danger" title="Delete scene" onClick={(e) => { e.stopPropagation(); onDelete(); }}>x</button>
       </div>
     </div>
   );
 }
 
-function PreviewFrame({ title, meta, tone, children }: { title: string; meta: string; tone: string; children: React.ReactNode }) {
+function PreviewFrame({ title, meta, tone, program, children }: { title: string; meta: string; tone: string; program?: boolean; children: React.ReactNode }) {
   return (
-    <div style={{ height: "100%", background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 8, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, height: 20, marginBottom: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius: 999, background: tone }} />
-        <span style={{ color: TEXT, fontWeight: 900, fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>{title}</span>
-        <span style={{ color: TEXT2, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{meta}</span>
+    <div className={`preview-frame ${program ? "is-program" : ""}`} style={{ "--tone": tone } as React.CSSProperties}>
+      <div className="preview-frame__head">
+        <span className="preview-frame__tone" />
+        <span className="preview-frame__title">{title}</span>
+        <span className="preview-frame__meta">{meta}</span>
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#000", borderRadius: 10, overflow: "hidden" }}>
-        {children}
-      </div>
+      <div className="preview-frame__body">{children}</div>
     </div>
+  );
+}
+
+function PerformanceSummary({ selectedScene, busAScene, busBScene, crossfade }: { selectedScene: Scene | null; busAScene: Scene | undefined; busBScene: Scene | undefined; crossfade: number }) {
+  return (
+    <aside className="feature-panel">
+      <SectionTitle>Performance</SectionTitle>
+      <InfoGrid rows={[
+        ["Bus A", busAScene?.name ?? "Empty"],
+        ["Bus B", busBScene?.name ?? "Empty"],
+        ["Selected", selectedScene?.name ?? "None"],
+        ["Mix", `${(crossfade * 100).toFixed(0)}% B`],
+      ]} />
+      <p className="help">Scene assignment and transport are available without opening the code editor.</p>
+    </aside>
   );
 }
 
 function ProjectPanel({ onSave, onLoad, scenes, selectedScene }: { onSave: () => void; onLoad: () => void; scenes: Scene[]; selectedScene: Scene | null }) {
   return (
-    <div style={panelBody}>
-      <SectionTitle title="Project" />
-      <p style={helpText}>Save/load now lives outside previews. Project data includes VJ buses, scenes, LED config, and calibration points.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <button onClick={onSave} style={{ ...buttonBase, background: ACCENT, borderColor: ACCENT, color: "#001018" }}>Save</button>
-        <button onClick={onLoad} style={{ ...buttonBase, background: SURFACE3, color: TEXT }}>Load</button>
+    <aside className="feature-panel">
+      <SectionTitle>Project</SectionTitle>
+      <div className="action-row">
+        <button className="button is-primary" onClick={onSave}>Save</button>
+        <button className="button" onClick={onLoad}>Load</button>
       </div>
       <InfoGrid rows={[
         ["Scenes", String(scenes.length)],
         ["Selected", selectedScene?.name ?? "None"],
         ["Type", selectedScene?.type ?? "-"],
       ]} />
-    </div>
+    </aside>
   );
 }
 
-function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorated, onToggleDecorations, onOpenLedMapping, ledMappingStatus }: {
-  busAScene: Scene | undefined;
-  busBScene: Scene | undefined;
-  crossfade: number;
-  isPlaying: boolean;
-  outputDecorated: boolean;
-  onToggleDecorations: () => void;
-  onOpenLedMapping: () => void;
-  ledMappingStatus: string;
-}) {
+function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorated, onToggleOutputDecorations, onOpenLedMapping, ledMappingStatus }: Parameters<typeof MainWorkspace>[0]) {
   return (
-    <div style={panelBody}>
-      <SectionTitle title="Output Window" />
+    <aside className="feature-panel">
+      <SectionTitle>Output</SectionTitle>
       <InfoGrid rows={[
         ["Status", isPlaying ? "Playing" : "Paused"],
         ["Bus A", busAScene?.name ?? "Empty"],
@@ -570,77 +719,55 @@ function OutputPanel({ busAScene, busBScene, crossfade, isPlaying, outputDecorat
         ["Mix", `${(crossfade * 100).toFixed(0)}% B`],
         ["Title bar", outputDecorated ? "Visible" : "Hidden"],
       ]} />
-      <button onClick={onToggleDecorations} style={{ ...buttonBase, width: "100%", background: SURFACE3, color: TEXT }}>
-        {outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}
-      </button>
-      <button onClick={onOpenLedMapping} style={{ ...buttonBase, width: "100%", background: SURFACE3, color: TEXT }}>
-        Open Calibration Window
-      </button>
-      <div style={{ color: TEXT2, fontSize: 10, lineHeight: 1.4 }}>{ledMappingStatus}</div>
-      <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
-        <SectionTitle title="Python parity" />
-        <p style={helpText}>UDP packet flow, brightness/gain curve, project calibration data, and auto calibration match the Python design. Person detection and two-camera floor/source mapping are not implemented in this UI yet; the VJ output replaces the source camera by design.</p>
-      </div>
-    </div>
+      <button className="button" onClick={onToggleOutputDecorations}>{outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}</button>
+      <button className="button" onClick={onOpenLedMapping}>Open Calibration Window</button>
+      <p className="help">{ledMappingStatus}</p>
+    </aside>
   );
 }
 
-function AudioPanel({ audio, onToggle, onDevice }: {
-  audio: AudioAnalysis;
-  onToggle: (enabled: boolean) => void;
-  onDevice: (deviceId: string, label?: string) => void;
-}) {
+function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onToggle: (enabled: boolean) => void; onDevice: (deviceId: string, label?: string) => void }) {
   const [devices, setDevices] = useState<RustAudioDevice[]>([]);
 
   useEffect(() => {
-    listAudioDevices()
-      .then((d) => setDevices(d))
-      .catch(() => {});
+    listAudioDevices().then(setDevices).catch(() => {});
   }, []);
 
   return (
-    <div style={panelBody}>
-      <SectionTitle title="Audio Analysis" />
-      <p style={helpText}>Native audio capture via cpal. Use a loopback input such as PipeWire monitor, BlackHole, Soundflower, or WASAPI loopback for system audio.</p>
-      <button onClick={() => onToggle(!audio.enabled)} style={{ ...buttonBase, width: "100%", background: audio.enabled ? ACCENT : SURFACE3, borderColor: audio.enabled ? ACCENT : BORDER, color: audio.enabled ? "#001018" : TEXT }}>
+    <aside className="feature-panel">
+      <SectionTitle>Audio</SectionTitle>
+      <button className={`button ${audio.enabled ? "is-primary" : ""}`} onClick={() => onToggle(!audio.enabled)}>
         {audio.enabled ? "Stop Audio" : "Start Audio"}
       </button>
-      <label>
-        <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Audio Device</div>
+      <div className="field">
+        <label>Audio Device</label>
         <select
           value={audio.deviceId}
           onChange={(e) => {
             const device = devices.find((d) => d.id === e.target.value);
             onDevice(e.target.value, device?.name);
           }}
-          style={inputStyle}
         >
-          <option value="">Auto (loopback, then input)</option>
+          <option value="">Auto</option>
           {devices.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name} {d.is_loopback ? "[Loopback]" : d.is_input ? "[In]" : d.is_output ? "[Out]" : ""}
             </option>
           ))}
         </select>
-      </label>
+      </div>
       <InfoGrid rows={[
         ["Status", audio.permission],
         ["Device", audio.deviceLabel || audio.deviceId || "Default"],
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
-        ["Phase", `${(audio.beatPhase * 100).toFixed(0)}%`],
-        ["Count", `${audio.beatCount}`],
       ]} />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(16, 1fr)", gap: 2, alignItems: "end", height: 56, padding: 8, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
-        {audio.fft.slice(0, 32).map((v, i) => (
-          <div key={i} style={{ height: `${Math.max(3, v * 48)}px`, background: i < 6 ? OK : i < 18 ? ACCENT : ACCENT2, borderRadius: 3 }} />
+      <div className="vu">
+        {audio.fft.slice(0, 16).map((v, i) => (
+          <div key={i} className="vu__bar" style={{ height: `${Math.max(3, v * 48)}px`, background: i < 5 ? "var(--green)" : i < 12 ? "var(--cyan)" : "var(--rose)" }} />
         ))}
       </div>
-      <div style={{ padding: 10, borderRadius: 10, border: `1px solid ${BORDER}`, background: "#0c111a" }}>
-        <SectionTitle title="Renderer Variables" />
-        <p style={helpText}>GLSL: iBpm, iBeat, iBeatPhase, iBeatCount, iFft[32]. p5/Three receive: bpm, beat, beatPhase, beatCount, fft.</p>
-      </div>
-    </div>
+    </aside>
   );
 }
 
@@ -656,49 +783,53 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   const [prompt, setPrompt] = useState("");
   const [selectedType, setSelectedType] = useState<SceneType>("glsl");
   const [showSettings, setShowSettings] = useState(false);
+  const disabled = generating || !prompt.trim() || !config.apiKey;
 
   return (
-    <div style={panelBody}>
-      <SectionTitle title="AI Generate" />
-      <p style={helpText}>Generate a new source or edit the selected scene without mixing AI controls into the scene list.</p>
-      <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+    <div className="panel-body">
+      <SectionTitle>AI / Code</SectionTitle>
+      <div className="action-row">
         {(["glsl", "p5", "threejs"] as SceneType[]).map((type) => (
-          <button key={type} onClick={() => setSelectedType(type)} style={{ ...buttonBase, background: selectedType === type ? typeColors[type] : SURFACE2, borderColor: selectedType === type ? typeColors[type] : BORDER, color: selectedType === type ? "#fff" : TEXT2 }}>
-            {type === "threejs" ? "Three" : type.toUpperCase()}
+          <button key={type} className={`button ${selectedType === type ? "is-active" : ""}`} style={{ "--active": typeColors[type] } as React.CSSProperties} onClick={() => setSelectedType(type)}>
+            {sceneTypeLabel(type)}
           </button>
         ))}
       </div>
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Describe the visual effect..."
-        rows={6}
-        style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit" }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && prompt.trim() && !generating) {
-            e.preventDefault();
-            onGenerate(selectedType, prompt.trim());
-          }
-        }}
-      />
-      <button disabled={generating || !prompt.trim() || !config.apiKey} onClick={() => onGenerate(selectedType, prompt.trim())} style={primaryButton(generating || !prompt.trim() || !config.apiKey)}>
+      <div className="field">
+        <label>Prompt</label>
+        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Describe the visual effect..." />
+      </div>
+      <button className="button is-purple" disabled={disabled} onClick={() => onGenerate(selectedType, prompt.trim())}>
         {generating ? "Generating..." : "Generate New Scene"}
       </button>
-      <button disabled={!onEdit || generating || !prompt.trim() || !config.apiKey} onClick={() => onEdit?.(prompt.trim())} style={secondaryButton(!onEdit || generating || !prompt.trim() || !config.apiKey)}>
+      <button className="button" disabled={!onEdit || disabled} onClick={() => onEdit?.(prompt.trim())}>
         {selectedScene ? `Edit ${selectedScene.name}` : "Select Scene To Edit"}
       </button>
-      <button onClick={() => setShowSettings(!showSettings)} style={{ ...buttonBase, background: "transparent", color: TEXT2, borderColor: BORDER }}>
+      <button className="button is-ghost" onClick={() => setShowSettings(!showSettings)}>
         {showSettings ? "Hide API Settings" : "API Settings"}
       </button>
       {showSettings && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 10, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 10 }}>
+        <div className="subpanel">
           <LabeledInput label="Base URL" value={config.baseUrl} onChange={(value) => onConfigChange({ baseUrl: value })} placeholder="https://api.openai.com/v1" />
           <LabeledInput label="API Key" type="password" value={config.apiKey} onChange={(value) => onConfigChange({ apiKey: value })} placeholder="sk-..." />
           <LabeledInput label="Model" value={config.model} onChange={(value) => onConfigChange({ model: value })} placeholder="gpt-4o" />
         </div>
       )}
-      {error && <div style={{ padding: 8, background: "#3a1515", borderRadius: 8, fontSize: 11, color: "#fca5a5", maxHeight: 80, overflow: "auto" }}>{error}</div>}
+      {error && <div className="subpanel error-text">{error}</div>}
     </div>
+  );
+}
+
+function LedWorkspace({ onOpenLedMapping, ledMappingStatus }: { onOpenLedMapping: () => void; ledMappingStatus: string }) {
+  return (
+    <aside className="feature-panel led-feature">
+      <SectionTitle>LED</SectionTitle>
+      <button className="button" onClick={onOpenLedMapping}>Open Calibration Window</button>
+      <p className="help">{ledMappingStatus}</p>
+      <div className="led-panel-mount">
+        <LedPanel />
+      </div>
+    </aside>
   );
 }
 
@@ -708,7 +839,7 @@ function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo, onSyncCh
   onPick: () => void;
   sendCommand: (id: string, action: string, value: unknown) => void;
   getVideoInfo: (id: string) => { currentTime: number; duration: number; playing: boolean; loop: boolean; loopStart: number; loopEnd: number; bpmLoop: boolean; beatsPerLoop: number } | null;
-  onSyncChange: (sync: import("../../types").VideoSync) => void;
+  onSyncChange: (sync: VideoSync) => void;
 }) {
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(true);
@@ -716,128 +847,69 @@ function VideoEditor({ scene, audio, onPick, sendCommand, getVideoInfo, onSyncCh
   const [duration, setDuration] = useState(0);
   const [loopStart, setLoopStart] = useState(0);
   const [loopEnd, setLoopEnd] = useState(0);
-  const sync = scene.videoSync ?? { enabled: false, measuresPerLoop: 1 };
-  const bpm = audio.bpm;
-  const loopDuration = sync.enabled && bpm > 0 ? sync.measuresPerLoop * 240 / bpm : 0;
   const [bpmLoop, setBpmLoop] = useState(false);
   const [beatsPerLoop, setBeatsPerLoop] = useState(4);
+  const sync = scene.videoSync ?? { enabled: false, measuresPerLoop: 1 };
+  const loopDuration = sync.enabled && audio.bpm > 0 ? sync.measuresPerLoop * 240 / audio.bpm : 0;
 
   useEffect(() => {
     const interval = setInterval(() => {
       const info = getVideoInfo(scene.id);
-      if (info) {
-        setPlaying(info.playing);
-        setCurrentTime(info.currentTime);
-        setDuration(info.duration);
-        setLoop(info.loop);
-        setLoopStart(info.loopStart);
-        setLoopEnd(info.loopEnd);
-        setBpmLoop(info.bpmLoop);
-        setBeatsPerLoop(info.beatsPerLoop);
-      }
+      if (!info) return;
+      setPlaying(info.playing);
+      setCurrentTime(info.currentTime);
+      setDuration(info.duration);
+      setLoop(info.loop);
+      setLoopStart(info.loopStart);
+      setLoopEnd(info.loopEnd);
+      setBpmLoop(info.bpmLoop);
+      setBeatsPerLoop(info.beatsPerLoop);
     }, 50);
     return () => clearInterval(interval);
   }, [scene.id, getVideoInfo]);
 
-  const hasVideo = !!scene.code;
-
   return (
-    <div style={{ height: "100%", background: "#1e1e1e", display: "flex", flexDirection: "column", padding: 18, gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <span style={{ color: typeColors.video, fontSize: 20, flexShrink: 0 }}>&#9654;</span>
-        <div style={{ flex: 1, minWidth: 0, color: hasVideo ? TEXT : TEXT2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {hasVideo ? scene.code : "No video selected"}
-        </div>
-        <button onClick={onPick} style={{ ...buttonBase, background: typeColors.video, borderColor: typeColors.video, color: "#fff" }}>
-          {hasVideo ? "Change" : "Choose File"}
+    <div className="video-editor">
+      <div className="video-editor__file">
+        <span className="video-editor__path">{scene.code || "No video selected"}</span>
+        <button className="button is-active" style={{ "--active": "var(--video)" } as React.CSSProperties} onClick={onPick}>
+          {scene.code ? "Change" : "Choose File"}
         </button>
       </div>
-      {hasVideo && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={() => sendCommand(scene.id, playing ? "pause" : "play", undefined)} style={{ ...buttonBase, background: SURFACE3, color: TEXT }}>
-              {playing ? "PAUSE" : "PLAY"}
-            </button>
-            <button onClick={() => sendCommand(scene.id, "loop", !loop)} style={{ ...buttonBase, background: loop ? ACCENT : SURFACE3, borderColor: loop ? ACCENT : BORDER, color: loop ? "#001018" : TEXT2 }}>
-              {loop ? "LOOP" : "ONCE"}
-            </button>
-            <button onClick={() => sendCommand(scene.id, "bpmLoop", !bpmLoop)} style={{ ...buttonBase, background: bpmLoop ? OK : SURFACE3, borderColor: bpmLoop ? OK : BORDER, color: bpmLoop ? "#001018" : TEXT2 }}>
-              BPM LOOP
-            </button>
-            <span style={{ color: TEXT2, fontSize: 12, marginLeft: "auto", fontVariantNumeric: "tabular-nums" }}>
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
+      {scene.code && (
+        <>
+          <div className="action-row">
+            <button className="button" onClick={() => sendCommand(scene.id, playing ? "pause" : "play", undefined)}>{playing ? "Pause" : "Play"}</button>
+            <button className={`button ${loop ? "is-primary" : ""}`} onClick={() => sendCommand(scene.id, "loop", !loop)}>{loop ? "Loop" : "Once"}</button>
+            <button className={`button ${bpmLoop ? "is-primary" : ""}`} onClick={() => sendCommand(scene.id, "bpmLoop", !bpmLoop)}>BPM Loop</button>
+            <span className="module-meta">{formatTime(currentTime)} / {formatTime(duration)}</span>
           </div>
-          <input type="range" min={0} max={duration || 0} step={0.01} value={currentTime} onChange={(e) => sendCommand(scene.id, "seek", parseFloat(e.target.value))} style={{ width: "100%", accentColor: typeColors.video }} />
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => sendCommand(scene.id, "loopStart", currentTime)} style={secondaryButton(false)}>Set In</button>
-            <span style={{ color: OK, fontVariantNumeric: "tabular-nums" }}>{formatTime(loopStart)}</span>
-            <span style={{ color: TEXT2 }}>-</span>
-            <span style={{ color: ACCENT2, fontVariantNumeric: "tabular-nums" }}>{formatTime(loopEnd)}</span>
-            <button onClick={() => sendCommand(scene.id, "loopEnd", currentTime)} style={secondaryButton(false)}>Set Out</button>
-            <button onClick={() => sendCommand(scene.id, "seek", loopStart)} style={secondaryButton(false)}>Go In</button>
-            <button onClick={() => { sendCommand(scene.id, "loopStart", 0); sendCommand(scene.id, "loopEnd", -1); }} style={secondaryButton(false)}>Reset</button>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 0 0", borderTop: `1px solid ${BORDER}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button onClick={() => onSyncChange({ ...sync, enabled: !sync.enabled })} style={{ ...buttonBase, background: sync.enabled ? ACCENT : SURFACE3, borderColor: sync.enabled ? ACCENT : BORDER, color: sync.enabled ? "#001018" : TEXT2 }}>
-                {sync.enabled ? "SYNC ON" : "SYNC OFF"}
-              </button>
-              <span style={{ color: TEXT2, fontSize: 10, fontWeight: 800, letterSpacing: 1 }}>BPM SYNC</span>
-            </div>
-            {sync.enabled && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: TEXT2, fontSize: 11, fontWeight: 700 }}>Measures</span>
-                <input type="number" min={1} max={64} value={sync.measuresPerLoop} onChange={(e) => onSyncChange({ ...sync, measuresPerLoop: Math.max(1, parseInt(e.target.value) || 1) })} style={{ width: 48, background: "#0c111a", border: `1px solid ${BORDER}`, borderRadius: 6, color: TEXT, padding: "4px 6px", fontSize: 13, fontWeight: 800, textAlign: "center" }} />
-                <span style={{ color: TEXT2, fontSize: 10, textTransform: "uppercase" }}>per loop</span>
-                {loopDuration > 0 && (
-                  <span style={{ color: OK, fontSize: 11, fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>
-                    {loopDuration.toFixed(2)}s / loop
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", padding: 10, border: `1px solid ${BORDER}`, borderRadius: 10, background: "#0c111a" }}>
-            <div>
-              <SectionTitle title="BPM Loop Timing" />
-              <p style={{ ...helpText, marginTop: 4 }}>
-                {audio.bpm > 0 ? `${beatsPerLoop} beats @ ${audio.bpm.toFixed(1)} BPM = ${((beatsPerLoop * 60) / audio.bpm).toFixed(2)}s loop from In point.` : "Start Audio Analysis to lock loop timing to detected BPM."}
-              </p>
-            </div>
-            <select value={beatsPerLoop} onChange={(e) => sendCommand(scene.id, "beatsPerLoop", parseInt(e.target.value, 10))} style={{ ...inputStyle, width: 84 }}>
+          <input className="range" type="range" min={0} max={duration || 0} step={0.01} value={currentTime} onChange={(e) => sendCommand(scene.id, "seek", parseFloat(e.target.value))} />
+          <div className="action-row">
+            <button className="button" onClick={() => sendCommand(scene.id, "loopStart", currentTime)}>Set In</button>
+            <span className="module-meta">{formatTime(loopStart)} - {formatTime(loopEnd)}</span>
+            <button className="button" onClick={() => sendCommand(scene.id, "loopEnd", currentTime)}>Set Out</button>
+            <button className={`button ${sync.enabled ? "is-primary" : ""}`} onClick={() => onSyncChange({ ...sync, enabled: !sync.enabled })}>
+              {sync.enabled ? "Sync On" : "Sync Off"}
+            </button>
+            <select value={beatsPerLoop} onChange={(e) => sendCommand(scene.id, "beatsPerLoop", parseInt(e.target.value, 10))}>
               {[1, 2, 4, 8, 16, 32].map((beats) => <option key={beats} value={beats}>{beats} beats</option>)}
             </select>
+            {loopDuration > 0 && <span className="module-meta">{loopDuration.toFixed(2)}s / loop</span>}
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-function BusButton({ label, active, color, onClick }: { label: string; active: boolean; color: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void }) {
-  return (
-    <button onClick={onClick} style={{ ...buttonBase, padding: "4px 8px", background: active ? color : "transparent", borderColor: active ? color : BORDER, color: active ? "#001018" : TEXT2 }}>
-      {label}
-    </button>
-  );
-}
-
-function VJButton({ onClick, children, accent }: { onClick: () => void; children: React.ReactNode; accent?: boolean }) {
-  return (
-    <button onClick={onClick} style={{ ...buttonBase, background: accent ? ACCENT : SURFACE3, borderColor: accent ? ACCENT : BORDER, color: accent ? "#001018" : TEXT }}>
-      {children}
-    </button>
-  );
-}
-
 function InfoGrid({ rows }: { rows: [string, string][] }) {
   return (
-    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden" }}>
+    <div className="info-grid">
       {rows.map(([label, value]) => (
-        <div key={label} style={{ display: "grid", gridTemplateColumns: "86px 1fr", gap: 8, padding: "8px 10px", borderBottom: `1px solid ${BORDER}`, background: SURFACE2 }}>
-          <span style={{ color: TEXT2, fontSize: 10, fontWeight: 900, textTransform: "uppercase", letterSpacing: 0.8 }}>{label}</span>
-          <span style={{ color: TEXT, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
+        <div className="info-grid__row" key={label}>
+          <span className="info-grid__label">{label}</span>
+          <span className="info-grid__value">{value}</span>
         </div>
       ))}
     </div>
@@ -852,80 +924,27 @@ function LabeledInput({ label, value, onChange, placeholder, type = "text" }: {
   type?: string;
 }) {
   return (
-    <label>
-      <div style={{ fontSize: 10, fontWeight: 900, color: TEXT2, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>{label}</div>
-      <input type={type} style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
-    </label>
+    <div className="field">
+      <label>{label}</label>
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+    </div>
   );
 }
 
-const buttonBase: React.CSSProperties = {
-  border: `1px solid ${BORDER}`,
-  borderRadius: 8,
-  padding: "6px 10px",
-  background: SURFACE2,
-  color: TEXT,
-  cursor: "pointer",
-  fontSize: 10,
-  fontWeight: 900,
-  letterSpacing: 0.4,
-  textTransform: "uppercase",
-};
-
-const iconButton: React.CSSProperties = {
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-  fontSize: 13,
-  padding: "0 2px",
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  background: "#0c111a",
-  border: `1px solid ${BORDER}`,
-  borderRadius: 8,
-  color: TEXT,
-  padding: "8px 9px",
-  fontSize: 12,
-  boxSizing: "border-box",
-};
-
-const panelBody: React.CSSProperties = {
-  height: "100%",
-  boxSizing: "border-box",
-  overflowY: "auto",
-  padding: 12,
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-};
-
-const helpText: React.CSSProperties = {
-  color: TEXT2,
-  fontSize: 11,
-  lineHeight: 1.5,
-  margin: 0,
-};
-
-function primaryButton(disabled: boolean): React.CSSProperties {
-  return {
-    ...buttonBase,
-    width: "100%",
-    background: disabled ? SURFACE3 : ACCENT,
-    borderColor: disabled ? BORDER : ACCENT,
-    color: disabled ? TEXT2 : "#001018",
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.55 : 1,
-  };
+function outputMeta(a: Scene | undefined, b: Scene | undefined, crossfade: number): string {
+  if (!a && !b) return "no buses assigned";
+  if (crossfade <= 0.01) return a?.name ?? "Bus A empty";
+  if (crossfade >= 0.99) return b?.name ?? "Bus B empty";
+  return `${a?.name ?? "empty"} + ${b?.name ?? "empty"}`;
 }
 
-function secondaryButton(disabled: boolean): React.CSSProperties {
-  return {
-    ...buttonBase,
-    background: SURFACE3,
-    color: disabled ? TEXT2 : TEXT,
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.55 : 1,
-  };
+function sceneTypeLabel(type: SceneType): string {
+  return type === "threejs" ? "Three" : type.toUpperCase();
+}
+
+function formatTime(s: number): string {
+  if (!isFinite(s) || s < 0) return "0:00";
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
 }

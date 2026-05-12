@@ -14,6 +14,8 @@ interface UseEngineOptions {
   busAPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   busBPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   selectedPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
+  selectedPreviewRefs?: React.RefObject<HTMLCanvasElement | null>[];
+  scenePreviewCanvasesRef?: React.RefObject<Map<string, HTMLCanvasElement | null>>;
   ledConfig?: LedConfig | null;
   ledPoints?: CalibrationPoint[];
 }
@@ -35,7 +37,7 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints } = opts;
 
   const renderersRef = useRef<Map<string, { renderer: Renderer; canvas: HTMLCanvasElement }>>(new Map());
   const compositorRef = useRef<Compositor | null>(null);
@@ -129,7 +131,11 @@ export function useEngine(opts: UseEngineOptions) {
       const activeIds = new Set<string>();
       if (busA) activeIds.add(busA);
       if (busB) activeIds.add(busB);
-      if (selectedPreviewRef && selectedSceneId) activeIds.add(selectedSceneId);
+      const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
+      if (hasSelectedPreview && selectedSceneId) activeIds.add(selectedSceneId);
+      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+        if (canvas) activeIds.add(id);
+      }
 
       for (const [id, entry] of renderersRef.current) {
         if (!activeIds.has(id)) {
@@ -202,22 +208,35 @@ export function useEngine(opts: UseEngineOptions) {
       }
 
       if (isPlaying) {
+        const updatedIds = new Set<string>();
+
         if (busA) {
           const entry = renderersRef.current.get(busA);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(busA);
           }
         }
         if (busB) {
           const entry = renderersRef.current.get(busB);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(busB);
           }
         }
         if (selectedSceneId && selectedSceneId !== busA && selectedSceneId !== busB) {
           const entry = renderersRef.current.get(selectedSceneId);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(selectedSceneId);
+          }
+        }
+        for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+          if (!canvas || updatedIds.has(id)) continue;
+          const entry = renderersRef.current.get(id);
+          if (entry) {
+            entry.renderer.update(time, dt, audio);
+            updatedIds.add(id);
           }
         }
 
@@ -230,6 +249,12 @@ export function useEngine(opts: UseEngineOptions) {
         if (selectedSceneId) {
           const selEntry = renderersRef.current.get(selectedSceneId);
           copyCanvas(selEntry?.canvas ?? null, selectedPreviewRef?.current ?? null);
+          for (const ref of selectedPreviewRefs ?? []) {
+            copyCanvas(selEntry?.canvas ?? null, ref.current);
+          }
+        }
+        for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+          copyCanvas(renderersRef.current.get(id)?.canvas ?? null, canvas);
         }
 
         if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
@@ -264,7 +289,7 @@ export function useEngine(opts: UseEngineOptions) {
       compositorRef.current?.destroy();
       compositorCanvasRef.current?.remove();
     };
-  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef]);
+  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef]);
 
   return { sendCommand, getVideoInfo };
 }

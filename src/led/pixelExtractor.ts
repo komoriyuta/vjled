@@ -69,6 +69,7 @@ export async function sendLedFrame(
     await ledSendColors(colorObj);
   } catch {
     // silently ignore send errors during real-time operation
+  
   }
 }
 
