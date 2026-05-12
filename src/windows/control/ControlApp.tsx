@@ -13,7 +13,7 @@ import {
 } from "../../hooks/useAudioAnalysis";
 import type { AudioAnalysis, Scene, SceneType, BusLabel } from "../../types";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
-import { sendLedFrame } from "../../led/pixelExtractor";
+import { sendLedFrameFromCanvas } from "../../led/pixelExtractor";
 import Editor from "@monaco-editor/react";
 import LedPanel from "../../components/LedPanel";
 
@@ -207,10 +207,7 @@ export default function ControlApp() {
       if (now - lastSend >= interval) {
         lastSend = now;
         const canvas = outputPreviewRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
-        const ctx = canvas?.getContext("2d");
-        if (canvas && ctx) {
-          sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
-        }
+        sendLedFrameFromCanvas(canvas, ledPoints, ledConfig);
       }
       ledFrameRef.current = requestAnimationFrame(loop);
     };

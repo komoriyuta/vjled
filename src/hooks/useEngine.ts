@@ -4,7 +4,7 @@ import type { Renderer } from "../renderers/types";
 import { createRenderer } from "../renderers/index";
 import { Compositor } from "../renderers/compositor";
 import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
-import { sendLedFrame } from "../led/pixelExtractor";
+import { sendLedFrameFromCanvas } from "../led/pixelExtractor";
 import type { CalibrationPoint, LedConfig } from "../types";
 import { emptyAudioAnalysis } from "../stores/vjStore";
 
@@ -237,10 +237,7 @@ export function useEngine(opts: UseEngineOptions) {
           if (now2 - ledLastSendRef.current >= 33) {
             ledLastSendRef.current = now2;
             const compCanvas = compositorCanvasRef.current;
-            const compCtx = compCanvas.getContext("2d");
-            if (compCtx) {
-              sendLedFrame(compCtx, compCanvas.width, compCanvas.height, ledPointsRef.current, ledConfigRef.current);
-            }
+            sendLedFrameFromCanvas(compCanvas, ledPointsRef.current, ledConfigRef.current);
           }
         }
       }

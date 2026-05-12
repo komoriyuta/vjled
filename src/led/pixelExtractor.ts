@@ -1,5 +1,8 @@
 import { ledSendColors } from "./commands";
+import { GpuPixelSampler } from "./gpuPixelSampler";
 import type { CalibrationPoint, LedConfig } from "../types";
+
+let gpuSampler: GpuPixelSampler | null | undefined;
 
 export function applyBrightnessCurve(
   value: number,
@@ -20,32 +23,61 @@ export function extractPixelColors(
   const colors = new Map<number, [number, number, number]>();
   if (points.length === 0) return colors;
 
-  const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
-  const data = imageData.data;
-
   for (const point of points) {
     const px = Math.round(point.x * (canvasWidth - 1));
     const py = Math.round(point.y * (canvasHeight - 1));
-    const idx = (py * canvasWidth + px) * 4;
+    const data = ctx.getImageData(px, py, 1, 1).data;
+    const br = applyBrightnessCurve(data[0] * config.brightness, config.colorGain[0]);
+    const bg = applyBrightnessCurve(data[1] * config.brightness, config.colorGain[1]);
+    const bb = applyBrightnessCurve(data[2] * config.brightness, config.colorGain[2]);
 
-    if (idx >= 0 && idx + 2 < data.length) {
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-
-      const br = applyBrightnessCurve(r * config.brightness, config.colorGain[0]);
-      const bg = applyBrightnessCurve(g * config.brightness, config.colorGain[1]);
-      const bb = applyBrightnessCurve(b * config.brightness, config.colorGain[2]);
-
-      colors.set(point.lanternId, [
-        Math.min(255, br),
-        Math.min(255, bg),
-        Math.min(255, bb),
-      ]);
-    }
+    colors.set(point.lanternId, [
+      Math.min(255, br),
+      Math.min(255, bg),
+      Math.min(255, bb),
+    ]);
   }
 
   return colors;
+}
+
+export function extractPixelColorsGpu(
+  canvas: HTMLCanvasElement,
+  points: CalibrationPoint[],
+  config: LedConfig,
+): Map<number, [number, number, number]> | null {
+  if (gpuSampler === undefined) {
+    try {
+      gpuSampler = new GpuPixelSampler();
+    } catch {
+      gpuSampler = null;
+    }
+  }
+  return gpuSampler?.sample(canvas, points, config) ?? null;
+}
+
+export async function sendLedFrameFromCanvas(
+  canvas: HTMLCanvasElement | null,
+  points: CalibrationPoint[],
+  config: LedConfig,
+): Promise<void> {
+  if (!canvas || !config.enabled || points.length === 0) return;
+
+  const ctx = canvas.getContext("2d");
+  const colors = extractPixelColorsGpu(canvas, points, config)
+    ?? (ctx ? extractPixelColors(ctx, canvas.width, canvas.height, points, config) : null);
+  if (!colors || colors.size === 0) return;
+
+  const colorObj: Record<number, [number, number, number]> = {};
+  for (const [k, v] of colors) {
+    colorObj[k] = v;
+  }
+
+  try {
+    await ledSendColors(colorObj);
+  } catch {
+    // silently ignore send errors during real-time operation
+  }
 }
 
 export async function sendLedFrame(
