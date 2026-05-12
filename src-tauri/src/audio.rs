@@ -355,16 +355,28 @@ fn select_target(host: &cpal::Host, requested: Option<&str>) -> Result<CaptureTa
             .map(CaptureTarget::Input)
             .or_else(|| find_output_by_name(host, name).map(CaptureTarget::OutputLoopback))
             .ok_or_else(|| format!("Device not found: {}", name)),
-        None => find_default_loopback(host)
-            .or_else(|| host.default_input_device().map(CaptureTarget::Input))
-            .ok_or("No audio input device available".into()),
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                Ok(host.default_input_device()
+                    .map(CaptureTarget::Input)
+                    .or_else(|| find_default_loopback(host))
+                    .ok_or::<String>("No audio input device available".into())?)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                find_default_loopback(host)
+                    .or_else(|| host.default_input_device().map(CaptureTarget::Input))
+                    .ok_or("No audio input device available".into())
+            }
+        }
     }
 }
 
 fn loopback_unavailable_message() -> String {
     #[cfg(target_os = "macos")]
     {
-        return "No system audio loopback input found. Install/select BlackHole, Soundflower, Loopback, or another virtual audio device.".into();
+        return "System audio loopback requires a virtual audio driver.\nInstall BlackHole (free): https://github.com/existentialaudio/blackhole\nThen select the BlackHole device as input.".into();
     }
 
     #[cfg(target_os = "linux")]
@@ -726,6 +738,20 @@ fn run_pipewire_capture(
     Ok(())
 }
 
+fn mic_error(e: cpal::BuildStreamError) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!(
+            "Failed to open audio input: {}. If microphone permission was denied, grant it in System Settings > Privacy & Security > Microphone.",
+            e
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("Failed to open audio input: {}", e)
+    }
+}
+
 fn find_default_loopback(host: &cpal::Host) -> Option<CaptureTarget> {
     if let Ok(iter) = host.input_devices() {
         for d in iter {
@@ -855,7 +881,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build F32 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         SampleFormat::I16 => {
             let tx = tx.clone();
@@ -869,7 +895,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build I16 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         SampleFormat::U16 => {
             let tx = tx.clone();
@@ -886,7 +912,7 @@ fn run_capture(
                     err_fn,
                     None,
                 )
-                .map_err(|e| format!("Failed to build U16 stream: {}", e))?
+                .map_err(|e| mic_error(e))?
         }
         _ => return Err(format!("Unsupported sample format: {:?}", sample_format)),
     };
