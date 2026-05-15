@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>VJLED - Control Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;700;800;900&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-background": "#e4e2e4",
+                        "on-surface": "#e4e2e4",
+                        "on-primary": "#00363a",
+                        "surface-dim": "#131315",
+                        "inverse-on-surface": "#303032",
+                        "surface-container-lowest": "#0e0e10",
+                        "surface-bright": "#39393b",
+                        "surface-variant": "#353437",
+                        "surface-container-low": "#1b1b1d",
+                        "on-primary-fixed": "#002022",
+                        "on-error": "#690005",
+                        "error": "#ffb4ab",
+                        "on-secondary-fixed": "#2c0051",
+                        "surface-container-highest": "#353437",
+                        "outline-variant": "#3b494b",
+                        "secondary-fixed-dim": "#ddb7ff",
+                        "secondary-fixed": "#f0dbff",
+                        "on-primary-fixed-variant": "#004f54",
+                        "inverse-primary": "#006970",
+                        "surface-container": "#1f1f21",
+                        "on-primary-container": "#006970",
+                        "secondary-container": "#6f00be",
+                        "primary-container": "#00f0ff",
+                        "surface": "#131315",
+                        "on-tertiary-fixed": "#271900",
+                        "primary": "#dbfcff",
+                        "outline": "#849495",
+                        "tertiary-fixed": "#ffdea8",
+                        "background": "#131315",
+                        "on-secondary-container": "#d6a9ff",
+                        "on-secondary": "#490080",
+                        "on-secondary-fixed-variant": "#6900b3",
+                        "tertiary": "#fff4e8",
+                        "inverse-surface": "#e4e2e4",
+                        "on-tertiary": "#412d00",
+                        "primary-fixed-dim": "#00dbe9",
+                        "primary-fixed": "#7df4ff",
+                        "surface-tint": "#00dbe9",
+                        "error-container": "#93000a",
+                        "on-tertiary-container": "#7d5800",
+                        "secondary": "#ddb7ff",
+                        "tertiary-container": "#ffd386",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-high": "#2a2a2c",
+                        "on-surface-variant": "#b9cacb",
+                        "tertiary-fixed-dim": "#ffba20",
+                        "on-tertiary-fixed-variant": "#5e4200"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "label-caps": ["Hanken Grotesk"],
+                        "data-lg": ["JetBrains Mono"],
+                        "display-lg": ["Hanken Grotesk"],
+                        "data-mono": ["JetBrains Mono"],
+                        "headline-md": ["Hanken Grotesk"],
+                        "body-sm": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}],
+                        "data-lg": ["18px", {"lineHeight": "24px", "letterSpacing": "-0.01em", "fontWeight": "700"}],
+                        "display-lg": ["40px", {"lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "800"}],
+                        "data-mono": ["14px", {"lineHeight": "20px", "letterSpacing": "0em", "fontWeight": "500"}],
+                        "headline-md": ["24px", {"lineHeight": "1.2", "letterSpacing": "0.05em", "fontWeight": "700"}],
+                        "body-sm": ["12px", {"lineHeight": "18px", "fontWeight": "400"}]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-panel {
+            background: rgba(27, 27, 29, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(59, 73, 75, 0.5);
+        }
+        .fader-track {
+            background: linear-gradient(90deg, #131315 0%, #1f1f21 50%, #131315 100%);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+        }
+        .cyan-glow {
+            box-shadow: 0 0 12px rgba(0, 219, 233, 0.3);
+        }
+        .purple-glow {
+            box-shadow: 0 0 12px rgba(111, 0, 190, 0.3);
+        }
+        .vu-segment {
+            height: 4px;
+            width: 100%;
+            margin-bottom: 1px;
+        }
+        .knob-container {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: radial-gradient(circle at center, #353437 0%, #131315 100%);
+            border: 2px solid #3b494b;
+            position: relative;
+        }
+        .knob-indicator {
+            position: absolute;
+            top: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 2px;
+            height: 6px;
+            background: #00dbe9;
+        }
+    </style>
+</head>
+<body class="bg-surface-dim text-on-surface selection:bg-primary-container selection:text-on-primary-container overflow-hidden h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="bg-surface-dim text-primary-fixed-dim border-b border-outline-variant flex justify-between items-center w-full px-6 py-2 z-50">
+<div class="flex items-center gap-8">
+<span class="text-headline-md font-headline-md font-black text-on-surface dark:text-on-surface">VJLED - Control</span>
+<nav class="hidden md:flex gap-6 items-center">
+<a class="text-primary-fixed-dim border-b-2 border-primary-fixed-dim pb-1 text-label-caps font-label-caps hover:bg-surface-bright transition-colors" href="#">Project</a>
+<a class="text-on-surface-variant dark:text-on-surface-variant text-label-caps font-label-caps hover:bg-surface-bright transition-colors" href="#">Output</a>
+<a class="text-on-surface-variant dark:text-on-surface-variant text-label-caps font-label-caps hover:bg-surface-bright transition-colors" href="#">Audio</a>
+<a class="text-on-surface-variant dark:text-on-surface-variant text-label-caps font-label-caps hover:bg-surface-bright transition-colors" href="#">AI</a>
+<a class="text-on-surface-variant dark:text-on-surface-variant text-label-caps font-label-caps hover:bg-surface-bright transition-colors" href="#">LED</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 px-3 py-1 bg-surface-container rounded border border-outline-variant">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[16px]">monitor_heart</span>
+<span class="font-data-mono text-body-sm text-primary-fixed-dim">60 FPS | 1080p</span>
+</div>
+<button class="bg-primary-container text-on-primary px-4 py-1 rounded font-label-caps text-label-caps active:scale-95 duration-100 transition-transform cyan-glow">Go Live</button>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary transition-colors">settings</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary transition-colors">fullscreen</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar -->
+<aside class="bg-surface-container-low border-r border-outline-variant flex flex-col items-center py-4 space-y-8 h-full w-20">
+<div class="flex flex-col items-center gap-1">
+<div class="w-10 h-10 rounded bg-surface-container-highest border border-outline-variant flex items-center justify-center">
+<span class="material-symbols-outlined text-primary">person</span>
+</div>
+<span class="text-label-caps font-label-caps font-bold text-on-primary-container text-[10px]">UNIT_01</span>
+</div>
+<nav class="flex flex-col gap-4 w-full px-2">
+<button class="bg-primary-container text-on-primary-container rounded-lg cyan-glow w-full aspect-square flex flex-col items-center justify-center border-l-4 border-primary-fixed-dim">
+<span class="material-symbols-outlined">video_library</span>
+<span class="text-[9px] font-label-caps mt-1">Media</span>
+</button>
+<button class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest transition-all w-full aspect-square flex flex-col items-center justify-center rounded-lg">
+<span class="material-symbols-outlined">terminal</span>
+<span class="text-[9px] font-label-caps mt-1">Script</span>
+</button>
+<button class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest transition-all w-full aspect-square flex flex-col items-center justify-center rounded-lg">
+<span class="material-symbols-outlined">tune</span>
+<span class="text-[9px] font-label-caps mt-1">Mixer</span>
+</button>
+<button class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest transition-all w-full aspect-square flex flex-col items-center justify-center rounded-lg">
+<span class="material-symbols-outlined">equalizer</span>
+<span class="text-[9px] font-label-caps mt-1">Audio</span>
+</button>
+<button class="text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest transition-all w-full aspect-square flex flex-col items-center justify-center rounded-lg">
+<span class="material-symbols-outlined">lightbulb</span>
+<span class="text-[9px] font-label-caps mt-1">Light</span>
+</button>
+</nav>
+<div class="mt-auto flex flex-col gap-4">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary">help</span>
+</div>
+</aside>
+<!-- Main Workspace -->
+<main class="flex-1 grid grid-cols-12 overflow-hidden bg-surface-container-lowest">
+<!-- Left: Library -->
+<section class="col-span-2 border-r border-outline-variant flex flex-col bg-surface-dim">
+<div class="p-4 border-b border-outline-variant flex justify-between items-center">
+<span class="text-label-caps font-label-caps">SCENES</span>
+<span class="text-body-sm font-data-mono text-outline">08 SRC</span>
+</div>
+<div class="flex-1 overflow-y-auto p-2 space-y-2">
+<div class="p-2 border border-primary-fixed-dim bg-surface-container-high rounded cursor-pointer cyan-glow">
+<div class="flex justify-between items-center mb-1">
+<span class="text-body-sm font-data-mono text-primary-fixed-dim">CYBER_GRID.glsl</span>
+<span class="px-1 text-[8px] bg-primary text-on-primary rounded">ACTIVE</span>
+</div>
+<div class="h-16 bg-black rounded overflow-hidden">
+<img class="w-full h-full object-cover opacity-50" data-alt="A highly detailed generative GLSL shader preview showing a complex grid of neon cyan and deep blue lines pulse with digital electricity against a dark pitch-black background, maintaining a cyber-industrial technical aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuD8B11DWPoCG5qPdHF9qJqQu5MBunEoBE-ozEGzt1306txmscXoSeBlciVciZLLyCjJdu0uz9Z1h9cbyk6LUwDMMAYJKP_uY9_T_DyoAK2W1ggRBMRsta1HlLU_abmK88Qd7StSvHWu-7nqUGFqNENrZhOKrK65SHAo0INg1_Ff0xw6alfbvcpRtZpKIkaSvuyWP32_7BTVECmoPXY-ugrnthvPCh9KyEq8nYN4O8RU_FGWKkpAMNP3oLwpQWRTpEB3fwBl4r-DYt8"/>
+</div>
+</div>
+<div class="p-2 border border-outline-variant bg-surface-container-low rounded cursor-pointer hover:border-outline transition-colors">
+<span class="text-body-sm font-data-mono block mb-1">WAVE_SIM.p5</span>
+<div class="h-16 bg-black rounded overflow-hidden">
+<img class="w-full h-full object-cover opacity-50" data-alt="A sophisticated p5.js fluid simulation visualization featuring soft white and grey smoke-like patterns swirling in a dark void. The lighting is moody and atmospheric, fitting for a low-light VJ booth environment." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAVWx_vsm5dJeAAe-dlkHjhsPinCMNxe45Cd9SfBPbj3sLnhZK23MUewC3PHUO4YsLDABgaUp3l1PdQMozo_mz09Vdxwd-3FGvFyaaOK-atzgFwWhDW59Wiuv-ZyYUKfAE3VVOtoCH6QjjToPPysYDhw-PaESOhGvH9DBlLjheF_F_gBF_Si6qAEhAvLssRsDzR2NesgsquEOKotOZgyUblbcLJ-GwSsAjTAAWXf9mySKWbpLiITsvxcDcmxFt48z_zasTJTYPYDP8"/>
+</div>
+</div>
+<div class="p-2 border border-outline-variant bg-surface-container-low rounded cursor-pointer hover:border-outline transition-colors">
+<span class="text-body-sm font-data-mono block mb-1">DATA_STREAM.3js</span>
+<div class="h-16 bg-black rounded overflow-hidden">
+<img class="w-full h-full object-cover opacity-50" data-alt="A three.js 3D visualization showing a stream of abstract data particles flowing through a digital tunnel, illuminated by vibrant cyan and electric purple light sources." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBAMgd1XQk4AJdMgHCSJP95q0GaUdmCLPQjl0mmWvSOxhkMmm6UvgHS4VMoIQrpEUD8klo0dSnDQLNxVhYCE0LUGP2mvhLWWxDeMt34yHRCg2s2kct4f1vDVcXc5BeK4dLHS0qfvyyp9Szv9KYoGBM2JDI4-_MP-q3Yi3REiUU_mvQaTWMP0rAdju05m3tnB9JxxNRvb-uhdfOs86GZ3YvimV6DO7rbIH8WBKlIrlEiresGQE7qJvpbMUpNbcKOHIX8QQO9HRf2EuY"/>
+</div>
+</div>
+</div>
+</section>
+<!-- Center: Output & Controls -->
+<section class="col-span-7 flex flex-col p-4 space-y-4 overflow-y-auto">
+<!-- Top Output Previews -->
+<div class="grid grid-cols-4 gap-4 items-start">
+<div class="col-span-1 space-y-4">
+<div class="glass-panel rounded-lg p-2 border-t-2 border-t-primary-fixed-dim">
+<div class="flex justify-between items-center mb-1">
+<div class="flex items-center gap-1">
+<div class="w-2 h-2 rounded-full bg-primary-fixed-dim animate-pulse"></div>
+<span class="text-label-caps font-label-caps text-[10px]">BUS A</span>
+</div>
+<span class="text-[9px] font-data-mono text-outline">CYBER_GRID</span>
+</div>
+<div class="aspect-video bg-black rounded border border-outline-variant relative overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Close-up of a digital video bus preview showing a neon-lit urban grid reflected in a rainy surface, utilizing a palette of cyan and deep blacks with high-contrast industrial lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDRlAm0kx-yHI5v794s-2B-_YIAkXW4wIFD4wNy9UNAFx-gP9eorZpcJ9D6Sl_V6DThN2iIVELKrXsIeXZcsHAER2sowOYqIUTV-G35XSJDQUXtefSi7ZAQP1s_Y0y9lgySJYw0P5zbooMEFy_MtCMti5zGVY2cEfumoDiMO9cCZvjJL9vBifLq2psfC6gz2hL-hxz_vQEOLF0H_hhDJhL6sKst-Gvs5fqAHCYE9jTIb1S7TYtKDaoIy1nuNM4Ta-subygCHcqYDC0"/>
+</div>
+</div>
+<div class="glass-panel rounded-lg p-2 border-t-2 border-t-secondary">
+<div class="flex justify-between items-center mb-1">
+<div class="flex items-center gap-1">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="text-label-caps font-label-caps text-[10px]">BUS B</span>
+</div>
+<span class="text-[9px] font-data-mono text-outline">EMPTY</span>
+</div>
+<div class="aspect-video bg-surface-container-lowest rounded border border-outline-variant flex items-center justify-center">
+<span class="text-body-sm font-data-mono text-outline">NO SOURCE</span>
+</div>
+</div>
+</div>
+<div class="col-span-3">
+<div class="glass-panel rounded-lg p-3 border-t-4 border-t-primary-container shadow-2xl">
+<div class="flex justify-between items-center mb-2">
+<span class="text-label-caps font-label-caps text-primary-fixed-dim">PROGRAM OUTPUT</span>
+<div class="flex gap-4">
+<span class="text-[10px] font-data-mono text-outline">REC: 00:42:15</span>
+<span class="text-[10px] font-data-mono text-primary-fixed-dim">MASTER: 100%</span>
+</div>
+</div>
+<div class="aspect-video bg-black rounded-lg border-2 border-outline-variant relative overflow-hidden cyan-glow">
+<img class="w-full h-full object-cover" data-alt="Main program output of a VJ software showing an immersive 3D scene with glowing abstract geometries and volumetric lighting. The colors are dominated by cyan and electric purple against a vast dark backdrop, suggesting a high-performance industrial visual environment." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDz9uMVdlPtLDm4iV5fTAQUCWGMea66oK7eIjiydV1nmKIppVWJO8e0PhpVgRofUX6CcwdIb3WJTZb5iUIqPWQrLd7GlzaBeTsuuRTTVpQ6eUD2rIw1u0qr3480XcRJyuPl1scg_BuVyjf-ypN9XzjTLueLzillokU4AKtInpxnIzcy5Zce8AuyO1Ywhi-DYZzPLRDCnJoveAJpNCD7KAq07KJt3z6aTiEXjNBhUdwOcxRnEepYwa6aLW5L9_qwac6HsmKUsmzCunI"/>
+<div class="absolute bottom-4 right-4 flex gap-1 items-end h-12">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Mid: Pro DJ Mixer Section -->
+<div class="glass-panel rounded-lg p-4 bg-surface-container-low shadow-xl">
+<div class="grid grid-cols-12 gap-4">
+<!-- Deck A Controls (Left Vertical) -->
+<div class="col-span-3 flex gap-4">
+<div class="flex flex-col items-center gap-2">
+<span class="text-[9px] font-label-caps text-outline">TRIM</span>
+<div class="knob-container">
+<div class="knob-indicator" style="transform: rotate(-45deg) translateX(-50%);"></div>
+</div>
+<span class="text-[8px] font-data-mono text-primary-fixed-dim">CHROMA</span>
+</div>
+<div class="flex-1 flex gap-2">
+<!-- VU Meter A -->
+<div class="w-3 flex flex-col-reverse gap-[1px] bg-surface-container-lowest p-[1px] rounded-sm">
+<div class="vu-segment bg-error h-2"></div>
+<div class="vu-segment bg-error opacity-40 h-2"></div>
+<div class="vu-segment bg-primary-container h-4"></div>
+<div class="vu-segment bg-primary-container h-4"></div>
+<div class="vu-segment bg-primary-container h-4 cyan-glow"></div>
+<div class="vu-segment bg-primary-container opacity-50 h-4"></div>
+<div class="vu-segment bg-primary-container opacity-30 h-4"></div>
+<div class="vu-segment bg-outline opacity-20 h-4"></div>
+</div>
+<!-- Fader A -->
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="flex-1 bg-surface-container-lowest rounded-sm border border-outline-variant relative flex justify-center py-2 overflow-hidden">
+<div class="absolute w-[2px] h-full bg-outline-variant opacity-20"></div>
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[9px] font-data-mono text-outline">
+<span>AUDIO_GAIN</span>
+<span class="text-primary-fixed-dim">+2.4dB</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-3/4 h-full bg-primary-container cyan-glow"></div>
+</div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="absolute w-12 h-4 bg-surface-bright border-y-2 border-primary-container cyan-glow top-1/4 z-10 cursor-pointer"></div>
+</div>
+</div>
+<div class="flex flex-col gap-2 justify-center">
+<button class="w-10 h-10 rounded-full border border-primary-container text-[8px] font-label-caps text-primary hover:bg-primary-container hover:text-on-primary transition-all">SYNC</button>
+<button class="w-10 h-10 rounded bg-primary-container/20 border border-primary-fixed-dim text-[8px] font-label-caps text-primary-fixed-dim cyan-glow">CHROMA</button>
+<button class="w-10 h-10 rounded bg-primary-container text-on-primary flex items-center justify-center cyan-glow">
+<span class="material-symbols-outlined text-[18px]">play_pause</span>
+</button>
+</div>
+</div>
+<!-- Center Area (Crossfader & Global Controls) -->
+<div class="col-span-6 flex flex-col justify-between py-2">
+<div class="grid grid-cols-3 gap-2 mb-4">
+<!-- Performance Pads Style Loop/FX -->
+<div class="flex flex-col gap-1">
+<span class="text-[8px] font-label-caps text-outline text-center">LOOP BUS A</span>
+<div class="grid grid-cols-3 gap-1">
+<button class="p-1 bg-surface-container-highest border border-outline-variant text-[9px] font-data-mono hover:bg-primary/20">1</button>
+<button class="p-1 bg-surface-container-highest border border-outline-variant text-[9px] font-data-mono hover:bg-primary/20">4</button>
+<button class="p-1 bg-surface-container-highest border border-outline-variant text-[9px] font-data-mono hover:bg-primary/20">8</button>
+</div>
+</div>
+<div class="flex flex-col gap-1 items-center justify-center">
+<span class="text-[14px] font-data-mono text-primary-fixed-dim leading-none">128.00</span>
+<span class="text-[8px] font-label-caps text-outline">MASTER BPM</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="text-[8px] font-label-caps text-outline text-center">FX SELECT</span>
+<select class="w-full bg-surface-container border border-outline-variant text-[9px] font-data-mono text-on-surface p-1 rounded">
+<option>NO_EFFECT</option>
+<option>GLITCH_STUTTER</option>
+<option>RGB_SHIFT</option>
+<option>BITCRUSH</option>
+</select>
+</div>
+</div>
+<!-- Crossfader -->
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="flex flex-col items-center px-8">
+<div class="flex justify-between w-full mb-1">
+<span class="text-[8px] font-data-mono text-outline">A</span>
+<span class="text-label-caps font-black tracking-widest text-on-surface text-[10px]">CROSSFADER</span>
+<span class="text-[8px] font-data-mono text-outline">B</span>
+</div>
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[9px] font-data-mono text-outline">
+<span>AUDIO_GAIN</span>
+<span class="text-primary-fixed-dim">+2.4dB</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-3/4 h-full bg-primary-container cyan-glow"></div>
+</div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="w-full h-10 bg-surface-container-lowest rounded-sm border border-outline-variant flex items-center relative shadow-inner px-2">
+<div class="absolute left-4 right-4 h-[1px] bg-outline-variant opacity-30"></div>
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[9px] font-data-mono text-outline">
+<span>AUDIO_GAIN</span>
+<span class="text-primary-fixed-dim">+2.4dB</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-3/4 h-full bg-primary-container cyan-glow"></div>
+</div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="absolute left-1/2 -translate-x-1/2 h-3 w-[1px] bg-outline opacity-40"></div>
+<div class="w-14 h-8 bg-surface-bright border-x-4 border-primary-container cyan-glow rounded-sm cursor-pointer relative z-10 flex items-center justify-center translate-x-[40px] hover:scale-105 transition-transform">
+<div class="w-[1px] h-5 bg-primary-container opacity-50 mx-[1px]"></div>
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[9px] font-data-mono text-outline">
+<span>AUDIO_GAIN</span>
+<span class="text-primary-fixed-dim">+2.4dB</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-3/4 h-full bg-primary-container cyan-glow"></div>
+</div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="w-[1px] h-5 bg-primary-container opacity-50 mx-[1px]"></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Deck B Controls (Right Vertical) -->
+<div class="col-span-3 flex gap-4 flex-row-reverse">
+<div class="flex flex-col items-center gap-2">
+<span class="text-[9px] font-label-caps text-outline">TRIM</span>
+<div class="knob-container">
+<div class="knob-indicator" style="transform: rotate(30deg) translateX(-50%);"></div>
+</div>
+<span class="text-[8px] font-data-mono text-secondary">GAIN</span>
+</div>
+<div class="flex-1 flex gap-2 flex-row-reverse">
+<!-- VU Meter B -->
+<div class="w-3 flex flex-col-reverse gap-[1px] bg-surface-container-lowest p-[1px] rounded-sm">
+<div class="vu-segment bg-error h-2"></div>
+<div class="vu-segment bg-error opacity-40 h-2"></div>
+<div class="vu-segment bg-secondary h-4"></div>
+<div class="vu-segment bg-secondary h-4"></div>
+<div class="vu-segment bg-secondary h-4 purple-glow"></div>
+<div class="vu-segment bg-secondary opacity-50 h-4"></div>
+<div class="vu-segment bg-secondary opacity-30 h-4"></div>
+<div class="vu-segment bg-outline opacity-20 h-4"></div>
+</div>
+<!-- Fader B -->
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="flex-1 bg-surface-container-lowest rounded-sm border border-outline-variant relative flex justify-center py-2 overflow-hidden">
+<div class="absolute w-[2px] h-full bg-outline-variant opacity-20"></div>
+<div class="flex items-center gap-4 bg-surface-container-lowest/50 p-2 rounded border border-outline-variant/30 mb-4 mx-4">
+<div class="flex gap-1 items-end h-8">
+<div class="w-1 bg-primary-fixed-dim h-full"></div>
+<div class="w-1 bg-primary-fixed-dim h-4/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-3/5"></div>
+<div class="w-1 bg-primary-fixed-dim h-5/6"></div>
+<div class="w-1 bg-primary-fixed-dim h-2/5"></div>
+</div>
+<div class="flex-1 space-y-1">
+<div class="flex justify-between text-[9px] font-data-mono text-outline">
+<span>AUDIO_GAIN</span>
+<span class="text-primary-fixed-dim">+2.4dB</span>
+</div>
+<div class="w-full h-1 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-3/4 h-full bg-primary-container cyan-glow"></div>
+</div>
+</div>
+<div class="flex flex-col items-center gap-1">
+<span class="text-[8px] font-label-caps text-outline">PEAK</span>
+<div class="px-1.5 py-0.5 rounded-sm bg-primary-fixed-dim text-on-primary font-data-mono text-[8px]">LOCKED</div>
+</div>
+</div><div class="absolute w-12 h-4 bg-surface-bright border-y-2 border-secondary purple-glow bottom-1/3 z-10 cursor-pointer"></div>
+</div>
+</div>
+<div class="flex flex-col gap-2 justify-center">
+<button class="w-10 h-10 rounded-full border border-secondary text-[8px] font-label-caps text-secondary hover:bg-secondary-container hover:text-on-secondary transition-all">SYNC</button>
+<button class="w-10 h-10 rounded bg-secondary-container/20 border border-secondary text-[8px] font-label-caps text-secondary purple-glow">CHROMA</button>
+<button class="w-10 h-10 rounded bg-secondary-container text-on-secondary flex items-center justify-center purple-glow">
+<span class="material-symbols-outlined text-[18px]">play_pause</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Bottom: Tabs Panel -->
+<div class="flex-1 flex flex-col glass-panel rounded-lg overflow-hidden border-t-2 border-t-outline-variant">
+<div class="bg-surface-container-high px-4 flex gap-4">
+<button class="py-2 border-b-2 border-primary-fixed-dim text-label-caps font-label-caps text-primary-fixed-dim">CODE_EDITOR</button>
+<button class="py-2 border-b-2 border-transparent text-label-caps font-label-caps text-on-surface-variant hover:text-on-surface transition-colors">DMX_MAP</button>
+</div>
+<div class="flex-1 p-4 bg-surface-container-lowest font-data-mono text-[13px] leading-relaxed overflow-y-auto">
+<div class="flex gap-4">
+<div class="text-outline select-none opacity-50">01<br/>02<br/>03<br/>04<br/>05<br/>06<br/>07</div>
+<div class="flex-1">
+<span class="text-secondary">#version</span> 150<br/>
+<span class="text-primary-fixed-dim">uniform</span> <span class="text-tertiary-fixed-dim">float</span> time;<br/>
+<span class="text-primary-fixed-dim">uniform</span> <span class="text-tertiary-fixed-dim">vec2</span> resolution;<br/>
+<span class="text-primary-fixed-dim">out</span> <span class="text-tertiary-fixed-dim">vec4</span> outColor;<br/>
+<br/>
+<span class="text-secondary">void</span> <span class="text-primary-container">main</span>() {<br/>
+                                  <span class="text-tertiary-fixed-dim">vec2</span> uv = gl_FragCoord.xy / resolution.xy;<br/>
+                                  outColor = <span class="text-tertiary-fixed-dim">vec4</span>(uv, <span class="text-primary-fixed-dim">sin</span>(time), 1.0);<br/>
+                                }
+                            </div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right: System Inspector -->
+<section class="col-span-3 border-l border-outline-variant flex flex-col bg-surface-dim p-4 space-y-6">
+<div>
+<span class="text-label-caps font-label-caps block mb-4">SYSTEM_INSPECTOR</span>
+<div class="space-y-2">
+<div class="p-3 bg-surface-container rounded border border-outline-variant flex justify-between items-center">
+<span class="text-body-sm font-data-mono text-outline">STATUS</span>
+<span class="text-body-sm font-data-mono text-primary-fixed-dim">ACTIVE_STREAM</span>
+</div>
+<div class="p-3 bg-surface-container rounded border border-outline-variant flex justify-between items-center">
+<span class="text-body-sm font-data-mono text-outline">SOURCE_A</span>
+<span class="text-body-sm font-data-mono">CYBER_GRID</span>
+</div>
+<div class="p-3 bg-surface-container rounded border border-outline-variant flex justify-between items-center">
+<span class="text-body-sm font-data-mono text-outline">SOURCE_B</span>
+<span class="text-body-sm font-data-mono">EMPTY</span>
+</div>
+<div class="p-3 bg-surface-container rounded border border-outline-variant flex justify-between items-center">
+<span class="text-body-sm font-data-mono text-outline">OUTPUT</span>
+<span class="text-body-sm font-data-mono">SYPHON_01</span>
+</div>
+</div>
+</div>
+<div class="space-y-4 flex-1 flex flex-col">
+<div class="flex items-center gap-2">
+<span class="text-label-caps font-label-caps text-secondary-fixed-dim">AI_GENERATOR</span>
+<span class="material-symbols-outlined text-[14px] text-secondary-fixed-dim">bolt</span>
+</div>
+<div class="flex-1 p-3 bg-surface-container-lowest rounded border border-secondary-container purple-glow flex flex-col gap-3">
+<div class="flex-1">
+<textarea class="w-full h-full bg-transparent border-none resize-none text-body-sm font-data-mono focus:ring-0 placeholder:text-outline/40" placeholder="Describe generative visual prompt..."></textarea>
+</div>
+<div class="flex flex-wrap gap-1">
+<span class="text-[9px] font-data-mono px-2 py-1 bg-secondary-container/20 rounded border border-secondary-container/40">NEON_INDUSTRIAL</span>
+<span class="text-[9px] font-data-mono px-2 py-1 bg-secondary-container/20 rounded border border-secondary-container/40">80S_WAVE</span>
+</div>
+<button class="w-full py-2 bg-secondary-container text-on-secondary-container rounded font-label-caps text-label-caps hover:brightness-110 active:scale-[0.98] transition-all">GENERATE_SCENE</button>
+<!-- Integrated Manual Source Creation -->
+<div class="mt-2 border-t border-secondary-container/30 pt-3">
+<span class="text-[9px] font-label-caps text-secondary-fixed-dim mb-2 block opacity-70">MANUAL SOURCE CREATION</span>
+<div class="grid grid-cols-2 gap-1">
+<button class="bg-error-container text-on-error-container py-1.5 rounded text-[10px] font-label-caps hover:brightness-110 transition-all">+ GLSL</button>
+<button class="bg-primary-container text-on-primary-container py-1.5 rounded text-[10px] font-label-caps hover:brightness-110 transition-all">+ P5</button>
+<button class="bg-secondary-container text-on-secondary-container py-1.5 rounded text-[10px] font-label-caps hover:brightness-110 transition-all">+ THREE</button>
+<button class="bg-tertiary-container text-on-tertiary-container py-1.5 rounded text-[10px] font-label-caps hover:brightness-110 transition-all">+ VIDEO</button>
+</div>
+</div>
+</div>
+</div>
+<div class="pt-4 border-t border-outline-variant">
+<button class="w-full py-2 bg-surface-container-highest text-on-surface border border-outline rounded text-label-caps font-label-caps hover:bg-surface-bright transition-colors">CALIBRATION_WINDOW</button>
+</div>
+</section>
+</main>
+</div>
+</body></html>

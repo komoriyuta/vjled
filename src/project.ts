@@ -4,7 +4,10 @@ import type {
   CalibrationPoint,
   LedConfig,
   LayoutInfo,
+  MixMode,
+  MixSettings,
   Scene,
+  SceneKeySettings,
   SceneType,
   VJState,
   VideoSync,
@@ -30,6 +33,7 @@ export interface ProjectData {
     busA: string | null;
     busB: string | null;
     crossfade: number;
+    mix: MixSettings;
     isPlaying: boolean;
     selectedSceneId: string | null;
     audio: ProjectAudioSettings;
@@ -53,6 +57,28 @@ export interface ParsedProject {
 }
 
 const sceneTypes = new Set<SceneType>(["glsl", "p5", "threejs", "video"]);
+const mixModes = new Set<MixMode>([
+  "crossfade",
+  "additive",
+  "screen",
+  "multiply",
+  "overlay",
+  "softLight",
+  "difference",
+  "lighten",
+  "darken",
+  "wipeLeft",
+  "wipeRight",
+  "wipeUp",
+  "wipeDown",
+  "circle",
+  "diamond",
+  "dissolve",
+  "luma",
+  "ripple",
+  "glitch",
+  "rgbSplit",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -78,6 +104,26 @@ function parseVideoSync(value: unknown): VideoSync | undefined {
   };
 }
 
+function parseSceneKey(value: unknown): SceneKeySettings | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    enabled: Boolean(value.enabled),
+    threshold: clamp(value.threshold, 0, 1, 0.08),
+    softness: clamp(value.softness, 0.001, 0.5, 0.08),
+    spill: clamp(value.spill, 0, 1, 0.2),
+  };
+}
+
+function parseMixSettings(value: unknown): MixSettings {
+  const raw = isRecord(value) ? value : {};
+  const mode = typeof raw.mode === "string" && mixModes.has(raw.mode as MixMode) ? raw.mode as MixMode : "crossfade";
+  return {
+    mode,
+    intensity: clamp(raw.intensity, 0, 1, 0.7),
+    feather: clamp(raw.feather, 0.001, 0.5, 0.08),
+  };
+}
+
 function parseScenes(value: unknown): Scene[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item, index) => {
@@ -94,6 +140,8 @@ function parseScenes(value: unknown): Scene[] {
     };
     const videoSync = parseVideoSync(item.videoSync);
     if (videoSync) scene.videoSync = videoSync;
+    const key = parseSceneKey(item.key);
+    if (key) scene.key = key;
     return [scene];
   });
 }
@@ -189,6 +237,7 @@ export function createProjectData(args: {
       busA: args.vj.busA,
       busB: args.vj.busB,
       crossfade: args.vj.crossfade,
+      mix: args.vj.mix,
       isPlaying: args.vj.isPlaying,
       selectedSceneId: args.vj.selectedSceneId,
       audio: {
@@ -225,6 +274,7 @@ export function parseProjectData(raw: unknown, fallbackLedConfig: LedConfig): Pa
     busA: existingSceneId(vjRaw.busA, scenes),
     busB: existingSceneId(vjRaw.busB, scenes),
     crossfade: clamp(vjRaw.crossfade, 0, 1, 0),
+    mix: parseMixSettings(vjRaw.mix),
     isPlaying: Boolean(vjRaw.isPlaying ?? true),
     selectedSceneId: existingSceneId(vjRaw.selectedSceneId, scenes) ?? scenes[0]?.id ?? null,
     audio,

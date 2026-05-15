@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AudioAnalysis, AudioInputDevice, Scene, SceneType, VJState } from "../types";
+import type { AudioAnalysis, AudioInputDevice, MixMode, MixSettings, Scene, SceneKeySettings, SceneType, VJState } from "../types";
 import { getDefaultCode } from "../defaults";
 
 interface VJStore extends VJState {
@@ -11,6 +11,9 @@ interface VJStore extends VJState {
   setBusA: (id: string | null) => void;
   setBusB: (id: string | null) => void;
   setCrossfade: (v: number) => void;
+  setMixMode: (mode: MixMode) => void;
+  setMixSettings: (mix: Partial<MixSettings>) => void;
+  setSceneKey: (sceneId: string, key: SceneKeySettings) => void;
   cutToA: () => void;
   cutToB: () => void;
   fadeToA: () => void;
@@ -39,11 +42,18 @@ export const emptyAudioAnalysis: AudioAnalysis = {
   beatCount: 0,
 };
 
+export const defaultMixSettings: MixSettings = {
+  mode: "crossfade",
+  intensity: 0.7,
+  feather: 0.08,
+};
+
 export const useVJStore = create<VJStore>((set, get) => ({
   scenes: [],
   busA: null,
   busB: null,
   crossfade: 0,
+  mix: defaultMixSettings,
   isPlaying: true,
   selectedSceneId: null,
   audio: emptyAudioAnalysis,
@@ -91,6 +101,23 @@ export const useVJStore = create<VJStore>((set, get) => ({
   setBusA: (id) => set({ busA: id }),
   setBusB: (id) => set({ busB: id }),
   setCrossfade: (v) => set({ crossfade: Math.max(0, Math.min(1, v)) }),
+  setMixMode: (mode) =>
+    set((s) => ({
+      mix: { ...s.mix, mode },
+    })),
+  setMixSettings: (mix) =>
+    set((s) => ({
+      mix: {
+        ...s.mix,
+        ...mix,
+        intensity: Math.max(0, Math.min(1, mix.intensity ?? s.mix.intensity)),
+        feather: Math.max(0.001, Math.min(0.5, mix.feather ?? s.mix.feather)),
+      },
+    })),
+  setSceneKey: (sceneId, key) =>
+    set((s) => ({
+      scenes: s.scenes.map((sc) => (sc.id === sceneId ? { ...sc, key } : sc)),
+    })),
 
   cutToA: () => set({ crossfade: 0 }),
   cutToB: () => set({ crossfade: 1 }),
@@ -164,6 +191,7 @@ export const useVJStore = create<VJStore>((set, get) => ({
       busA: data.busA,
       busB: data.busB,
       crossfade: data.crossfade,
+      mix: data.mix ?? defaultMixSettings,
       isPlaying: data.isPlaying,
       selectedSceneId: data.selectedSceneId,
       audio: {

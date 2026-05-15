@@ -14,6 +14,8 @@ interface UseEngineOptions {
   busAPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   busBPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
   selectedPreviewRef?: React.RefObject<HTMLCanvasElement | null>;
+  selectedPreviewRefs?: React.RefObject<HTMLCanvasElement | null>[];
+  scenePreviewCanvasesRef?: React.RefObject<Map<string, HTMLCanvasElement | null>>;
   ledConfig?: LedConfig | null;
   ledPoints?: CalibrationPoint[];
 }
@@ -40,7 +42,7 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, ledConfig, ledPoints } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints } = opts;
 
   const renderersRef = useRef<Map<string, RendererEntry>>(new Map());
   const loadingRenderersRef = useRef<Map<string, Promise<RendererEntry | null>>>(new Map());
@@ -51,6 +53,7 @@ export function useEngine(opts: UseEngineOptions) {
     busA: null,
     busB: null,
     crossfade: 0,
+    mix: { mode: "crossfade", intensity: 0.7, feather: 0.08 },
     isPlaying: true,
     selectedSceneId: null,
     audio: emptyAudioAnalysis,
@@ -157,7 +160,11 @@ export function useEngine(opts: UseEngineOptions) {
       const activeIds = new Set<string>();
       if (busA) activeIds.add(busA);
       if (busB) activeIds.add(busB);
-      if (selectedPreviewRef && selectedSceneId) activeIds.add(selectedSceneId);
+      const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
+      if (hasSelectedPreview && selectedSceneId) activeIds.add(selectedSceneId);
+      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+        if (canvas) activeIds.add(id);
+      }
 
       for (const [id, entry] of renderersRef.current) {
         if (!activeIds.has(id)) {
@@ -218,7 +225,7 @@ export function useEngine(opts: UseEngineOptions) {
     let running = true;
     function loop() {
       if (!running) return;
-      const { busA, busB, crossfade, isPlaying, selectedSceneId, scenes, audio } = stateRef.current;
+      const { busA, busB, crossfade, mix, isPlaying, selectedSceneId, scenes, audio } = stateRef.current;
       const now = performance.now();
       const time = (now - t0Ref.current) / 1000;
       const dt = time - prevRef.current;
@@ -241,34 +248,61 @@ export function useEngine(opts: UseEngineOptions) {
       }
 
       if (isPlaying) {
+        const updatedIds = new Set<string>();
+
         if (busA) {
           const entry = renderersRef.current.get(busA);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(busA);
           }
         }
         if (busB) {
           const entry = renderersRef.current.get(busB);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(busB);
           }
         }
         if (selectedSceneId && selectedSceneId !== busA && selectedSceneId !== busB) {
           const entry = renderersRef.current.get(selectedSceneId);
           if (entry) {
             entry.renderer.update(time, dt, audio);
+            updatedIds.add(selectedSceneId);
+          }
+        }
+        for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+          if (!canvas || updatedIds.has(id)) continue;
+          const entry = renderersRef.current.get(id);
+          if (entry) {
+            entry.renderer.update(time, dt, audio);
+            updatedIds.add(id);
           }
         }
 
+        const lookup = new Map(scenes.map((s) => [s.id, s]));
         const cA = busA ? renderersRef.current.get(busA)?.canvas ?? null : null;
         const cB = busB ? renderersRef.current.get(busB)?.canvas ?? null : null;
-        compositorRef.current?.render(cA, cB, crossfade);
+        const sceneA = busA ? lookup.get(busA) : undefined;
+        const sceneB = busB ? lookup.get(busB) : undefined;
+        compositorRef.current?.render(cA, cB, {
+          crossfade,
+          mix,
+          keyA: sceneA?.key,
+          keyB: sceneB?.key,
+        });
 
         copyCanvas(cA, busAPreviewRef?.current ?? null);
         copyCanvas(cB, busBPreviewRef?.current ?? null);
         if (selectedSceneId) {
           const selEntry = renderersRef.current.get(selectedSceneId);
           copyCanvas(selEntry?.canvas ?? null, selectedPreviewRef?.current ?? null);
+          for (const ref of selectedPreviewRefs ?? []) {
+            copyCanvas(selEntry?.canvas ?? null, ref.current);
+          }
+        }
+        for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+          copyCanvas(renderersRef.current.get(id)?.canvas ?? null, canvas);
         }
 
         if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
@@ -303,7 +337,7 @@ export function useEngine(opts: UseEngineOptions) {
       compositorRef.current?.destroy();
       compositorCanvasRef.current?.remove();
     };
-  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef]);
+  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef]);
 
   return { sendCommand, getVideoInfo };
 }

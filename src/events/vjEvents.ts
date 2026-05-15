@@ -1,11 +1,12 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { AudioAnalysis, Scene } from "../types";
+import type { AudioAnalysis, MixSettings, Scene } from "../types";
 
 export interface VJStatePayload {
   scenes: Scene[];
   busA: string | null;
   busB: string | null;
   crossfade: number;
+  mix: MixSettings;
   isPlaying: boolean;
   selectedSceneId: string | null;
   audio: AudioAnalysis;
@@ -85,4 +86,3 @@ export async function listenVJStateRequest(handler: () => void): Promise<Unliste
     tauriUnlisten?.();
   };
 }
-

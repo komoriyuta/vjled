@@ -5,12 +5,48 @@ export interface VideoSync {
   measuresPerLoop: number;
 }
 
+export type MixMode =
+  | "crossfade"
+  | "additive"
+  | "screen"
+  | "multiply"
+  | "overlay"
+  | "softLight"
+  | "difference"
+  | "lighten"
+  | "darken"
+  | "wipeLeft"
+  | "wipeRight"
+  | "wipeUp"
+  | "wipeDown"
+  | "circle"
+  | "diamond"
+  | "dissolve"
+  | "luma"
+  | "ripple"
+  | "glitch"
+  | "rgbSplit";
+
+export interface MixSettings {
+  mode: MixMode;
+  intensity: number;
+  feather: number;
+}
+
+export interface SceneKeySettings {
+  enabled: boolean;
+  threshold: number;
+  softness: number;
+  spill: number;
+}
+
 export interface Scene {
   id: string;
   name: string;
   type: SceneType;
   code: string;
   videoSync?: VideoSync;
+  key?: SceneKeySettings;
 }
 
 export type BusLabel = "A" | "B";
@@ -20,6 +56,7 @@ export interface VJState {
   busA: string | null;
   busB: string | null;
   crossfade: number;
+  mix: MixSettings;
   isPlaying: boolean;
   selectedSceneId: string | null;
   audio: AudioAnalysis;
