@@ -578,9 +578,21 @@ function TransportPanel({ crossfade, mix, onCutA, onCutB, onFadeA, onFadeB, onCr
 }) {
   return (
     <div className="transport">
-      <div className="transport__group">
+      <div className="transport__group transport__cut-pair">
         <button className="button" onClick={onCutA}>Cut A</button>
-        <button className="button" onClick={onFadeA}>Fade A</button>
+        <button className="button" onClick={onCutB}>Cut B</button>
+      </div>
+      <div className="xfade">
+        <div className="xfade__labels">
+          <span>A</span>
+          <span>{mixLabels[mix.mode]} {(crossfade * 100).toFixed(0)}%</span>
+          <span>B</span>
+        </div>
+        <input className="range xfade__range" type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => onCrossfade(parseFloat(e.target.value))} />
+      </div>
+      <div className="transport__group transport__fade-pair">
+        <button className="button" onClick={onFadeA}>To A</button>
+        <button className="button" onClick={onFadeB}>To B</button>
       </div>
       <div className="field transport__mode">
         <label>Mix Mode</label>
@@ -593,21 +605,9 @@ function TransportPanel({ crossfade, mix, onCutA, onCutB, onFadeA, onFadeB, onCr
           </optgroup>
         </select>
       </div>
-      <div className="xfade">
-        <div className="xfade__labels">
-          <span>A</span>
-          <span>{mixLabels[mix.mode]} {(crossfade * 100).toFixed(0)}%</span>
-          <span>B</span>
-        </div>
-        <input className="range" type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => onCrossfade(parseFloat(e.target.value))} />
-      </div>
       <div className="transport__tune">
         <MiniSlider label="Intensity" value={mix.intensity} min={0} max={1} step={0.01} onChange={(value) => onMixChange({ intensity: value })} />
         <MiniSlider label="Feather" value={mix.feather} min={0.001} max={0.5} step={0.005} onChange={(value) => onMixChange({ feather: value })} />
-      </div>
-      <div className="transport__group">
-        <button className="button" onClick={onFadeB}>Fade B</button>
-        <button className="button" onClick={onCutB}>Cut B</button>
       </div>
     </div>
   );
