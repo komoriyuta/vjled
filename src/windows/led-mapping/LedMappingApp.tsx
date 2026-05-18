@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLedStore } from "../../stores/ledStore";
+import { useEngine } from "../../hooks/useEngine";
 import {
   ledInitSimple,
   ledLoadLayout,
@@ -24,6 +25,51 @@ const HANDLE_R = 8;
 
 type Vec2 = [number, number];
 type SideTab = "setup" | "map" | "calibrate" | "test";
+
+function drawTriangleImage(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  src: Vec2[],
+  dst: Vec2[],
+) {
+  const [s0, s1, s2] = src;
+  const [d0, d1, d2] = dst;
+  const denom = s0[0] * (s1[1] - s2[1]) + s1[0] * (s2[1] - s0[1]) + s2[0] * (s0[1] - s1[1]);
+  if (Math.abs(denom) < 1e-6) return;
+
+  const a = (d0[0] * (s1[1] - s2[1]) + d1[0] * (s2[1] - s0[1]) + d2[0] * (s0[1] - s1[1])) / denom;
+  const b = (d0[1] * (s1[1] - s2[1]) + d1[1] * (s2[1] - s0[1]) + d2[1] * (s0[1] - s1[1])) / denom;
+  const c = (d0[0] * (s2[0] - s1[0]) + d1[0] * (s0[0] - s2[0]) + d2[0] * (s1[0] - s0[0])) / denom;
+  const d = (d0[1] * (s2[0] - s1[0]) + d1[1] * (s0[0] - s2[0]) + d2[1] * (s1[0] - s0[0])) / denom;
+  const e = (d0[0] * (s1[0] * s2[1] - s2[0] * s1[1]) + d1[0] * (s2[0] * s0[1] - s0[0] * s2[1]) + d2[0] * (s0[0] * s1[1] - s1[0] * s0[1])) / denom;
+  const f = (d0[1] * (s1[0] * s2[1] - s2[0] * s1[1]) + d1[1] * (s2[0] * s0[1] - s0[0] * s2[1]) + d2[1] * (s0[0] * s1[1] - s1[0] * s0[1])) / denom;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0[0], d0[1]);
+  ctx.lineTo(d1[0], d1[1]);
+  ctx.lineTo(d2[0], d2[1]);
+  ctx.closePath();
+  ctx.clip();
+  ctx.setTransform(a, b, c, d, e, f);
+  ctx.drawImage(image, 0, 0);
+  ctx.restore();
+}
+
+function drawQuadImage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLCanvasElement,
+  dst: Vec2[],
+  opacity: number,
+) {
+  if (image.width <= 0 || image.height <= 0 || opacity <= 0) return;
+  const src: Vec2[] = [[0, 0], [image.width, 0], [image.width, image.height], [0, image.height]];
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  drawTriangleImage(ctx, image, [src[0], src[1], src[2]], [dst[0], dst[1], dst[2]]);
+  drawTriangleImage(ctx, image, [src[0], src[2], src[3]], [dst[0], dst[2], dst[3]]);
+  ctx.restore();
+}
 
 function computeHomography(src: Vec2[], dst: Vec2[]): number[] | null {
   const [sx0, sy0] = src[0], [sx1, sy1] = src[1], [sx2, sy2] = src[2], [sx3, sy3] = src[3];
@@ -90,6 +136,7 @@ export default function LedMappingApp() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const sourcePreviewRef = useRef<HTMLDivElement>(null);
   const cameraStream = useLedStore((s) => s.cameraStream);
   const config = useLedStore((s) => s.config);
   const layoutInfo = useLedStore((s) => s.layoutInfo);
@@ -113,7 +160,15 @@ export default function LedMappingApp() {
   const [sideTab, setSideTab] = useState<SideTab>("setup");
   const [cameras, setCameras] = useState<CameraDevice[]>([]);
   const [cameraStatus, setCameraStatus] = useState("Camera stopped");
+  const [showSourceOverlay, setShowSourceOverlay] = useState(true);
+  const [sourceOverlayOpacity, setSourceOverlayOpacity] = useState(0.5);
+  const [freezeCameraPreview, setFreezeCameraPreview] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  useEngine({
+    outputContainerRef: sourcePreviewRef,
+    preview: true,
+  });
 
   useEffect(() => {
     prepareCameraWindow();
@@ -139,7 +194,7 @@ export default function LedMappingApp() {
     const draw = () => {
       const width = video.videoWidth;
       const height = video.videoHeight;
-      if (width > 0 && height > 0) {
+      if (!freezeCameraPreview && width > 0 && height > 0) {
         if (canvas.width !== width || canvas.height !== height) {
           canvas.width = width;
           canvas.height = height;
@@ -151,7 +206,7 @@ export default function LedMappingApp() {
     frame = requestAnimationFrame(draw);
 
     return () => cancelAnimationFrame(frame);
-  }, [cameraStream]);
+  }, [cameraStream, freezeCameraPreview]);
 
   const startCamera = useCallback(async () => {
     try {
@@ -189,8 +244,20 @@ export default function LedMappingApp() {
       cameraStream.getTracks().forEach((t) => t.stop());
       setCameraStream(null);
       setCameraStatus("Camera stopped");
+      setFreezeCameraPreview(false);
     }
   }, [cameraStream, setCameraStream]);
+
+  const freezeCurrentFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!video || !canvas || !ctx || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setFreezeCameraPreview(true);
+  }, []);
 
   const handleConnect = useCallback(async () => {
     setError(null);
@@ -304,6 +371,16 @@ export default function LedMappingApp() {
       const h = overlay.height;
 
       if (handles.length === 4) {
+        const sourceCanvas = sourcePreviewRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
+        if (showSourceOverlay && sourceCanvas) {
+          drawQuadImage(
+            ctx,
+            sourceCanvas,
+            handles.map(([x, y]) => [x * w, y * h] as Vec2),
+            sourceOverlayOpacity,
+          );
+        }
+
         ctx.beginPath();
         ctx.moveTo(handles[0][0] * w, handles[0][1] * h);
         for (let i = 1; i < 4; i++) ctx.lineTo(handles[i][0] * w, handles[i][1] * h);
@@ -343,7 +420,7 @@ export default function LedMappingApp() {
     };
     animFrame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animFrame);
-  }, [handles, dragging, rawCamPoints]);
+  }, [handles, dragging, rawCamPoints, showSourceOverlay, sourceOverlayOpacity]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     const rect = overlayRef.current?.getBoundingClientRect();
@@ -389,6 +466,7 @@ export default function LedMappingApp() {
 
   return (
     <div style={{ display: "flex", height: "100vh", background: BG, color: TEXT, fontFamily: "-apple-system, system-ui, sans-serif", fontSize: 12 }}>
+      <div ref={sourcePreviewRef} style={{ position: "fixed", left: -10000, top: -10000, width: 480, height: 270, pointerEvents: "none", opacity: 0 }} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", position: "relative" }} ref={containerRef}>
         {cameraStream ? (
           <>
@@ -468,6 +546,18 @@ export default function LedMappingApp() {
               <div style={{ fontSize: 10, color: TEXT2, lineHeight: 1.4 }}>
                 Drag the 4 numbered corners on the camera view to outline the physical area used by the VJ output.
               </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: TEXT2 }}>
+                <input type="checkbox" checked={showSourceOverlay} onChange={(e) => setShowSourceOverlay(e.target.checked)} />
+                VJ output overlay
+              </label>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: TEXT2, textTransform: "uppercase", marginBottom: 4 }}>Overlay Opacity</div>
+                <input type="range" min={0} max={1} step={0.05} value={sourceOverlayOpacity} onChange={(e) => setSourceOverlayOpacity(parseFloat(e.target.value))} style={{ width: "100%" }} />
+                <span style={{ fontSize: 10, color: TEXT2 }}>{(sourceOverlayOpacity * 100).toFixed(0)}%</span>
+              </div>
+              <button onClick={freezeCameraPreview ? () => setFreezeCameraPreview(false) : freezeCurrentFrame} disabled={!cameraStream} style={{ background: freezeCameraPreview ? "#2ecc71" : PANEL, border: `1px solid ${freezeCameraPreview ? "#2ecc71" : BORDER}`, color: freezeCameraPreview ? "#fff" : TEXT2, borderRadius: 4, padding: "6px 12px", fontSize: 11, fontWeight: 700, cursor: !cameraStream ? "not-allowed" : "pointer", opacity: !cameraStream ? 0.5 : 1 }}>
+                {freezeCameraPreview ? "Use Live Camera" : "Freeze Camera Frame"}
+              </button>
               {handles.map((h, i) => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "20px 1fr 1fr", gap: 4, alignItems: "center", fontSize: 10, color: TEXT2 }}>
                   <span>{i + 1}</span>
