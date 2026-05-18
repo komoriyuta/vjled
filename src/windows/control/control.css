@@ -452,6 +452,38 @@ button { color: inherit; }
   background: var(--surface-mid);
   padding: 10px;
 }
+.auto-vj { background: var(--surface-low); }
+.auto-vj__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.auto-vj__meters {
+  display: grid;
+  gap: 6px;
+}
+.auto-vj__meter {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.auto-vj__meter > div {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: #090b0d;
+}
+.auto-vj__meter > div > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan), var(--rose));
+}
 .help { font-size: 11px; line-height: 1.45; margin: 0; }
 .empty-state {
   min-height: 100px;

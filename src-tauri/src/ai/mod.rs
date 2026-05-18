@@ -38,6 +38,7 @@ fn system_prompt_for_type(scene_type: &str) -> String {
 Rules:
 - Use `void mainImage(out vec4 fragColor, in vec2 fragCoord)` as the entry point.
 - Available uniforms: `iTime` (float, seconds), `iResolution` (vec3, canvas size), `iMouse` (vec4), `iFrame` (int).
+- Available audio uniforms: `iBpm`, `iBeat`, `iBeatPhase`, `iBeatCount`, `iFft[32]`.
 - Do NOT use `void main()` or `gl_FragCoord`.
 - Output ONLY the shader code. No markdown fences, no explanations.
 - Make it visually impressive and dynamic.
@@ -48,6 +49,7 @@ Rules:
 Rules:
 - Use `function setup()` and `function draw()` as global functions.
 - Available globals: `createCanvas`, `background`, `fill`, `stroke`, `noStroke`, `noFill`, `ellipse`, `rect`, `line`, `triangle`, `beginShape`, `endShape`, `vertex`, `push`, `pop`, `translate`, `rotate`, `scale`, `colorMode`, `textAlign`, `textSize`, `text`, `noise`, `random`, `map`, `constrain`, `lerp`, `cos`, `sin`, `tan`, `abs`, `floor`, `ceil`, `min`, `max`, `pow`, `sqrt`, `millis`, `frameCount`, `width`, `height`, `mouseX`, `mouseY`, `windowWidth`, `windowHeight`, `windowResized`.
+- Available audio globals: `audio`, `bpm`, `beat`, `beatPhase`, `beatCount`, `fft`.
 - Do NOT use `new p5()` or instance mode syntax.
 - Do NOT include HTML or createCanvas's third argument unless needed (WEBGL).
 - Output ONLY the JavaScript code. No markdown fences, no explanations.
@@ -57,8 +59,9 @@ Rules:
 
 Rules:
 - Define `function setup(scene, camera, renderer)` that creates objects and returns a state object.
-- Define `function update(state, time, dt)` that animates the scene each frame.
+- Define `function update(state, time, dt, audio)` that animates the scene each frame.
 - Available globals: `THREE` (the Three.js namespace).
+- Audio includes: `audio.bpm`, `audio.beat`, `audio.beatPhase`, `audio.beatCount`, `audio.fft`.
 - In setup: configure camera position, add objects to scene, return state with references.
 - In update: use `time` (seconds) and `dt` (delta seconds) for animation.
 - Do NOT import anything. Do NOT create renderer or DOM elements.

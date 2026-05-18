@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
-import { useVJStore } from "../../stores/vjStore";
+import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
 import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
@@ -30,6 +30,40 @@ const typeColors: Record<SceneType, string> = {
 };
 
 type Workspace = "perform" | "project" | "output" | "audio" | "ai" | "led";
+
+type GenerativeSceneType = Exclude<SceneType, "video">;
+type AutoSceneType = GenerativeSceneType | "auto";
+
+interface AutoVJSettings {
+  enabled: boolean;
+  sceneType: AutoSceneType;
+  intervalBars: number;
+  maxScenes: number;
+}
+
+interface AudioMood {
+  label: string;
+  energy: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  palette: string;
+  motion: string;
+  texture: string;
+}
+
+interface AutoVJStatus {
+  mood: AudioMood;
+  lastAction: string;
+  nextTrigger: string;
+}
+
+const defaultAutoVJ: AutoVJSettings = {
+  enabled: false,
+  sceneType: "auto",
+  intervalBars: 4,
+  maxScenes: 12,
+};
 
 const mixLabels: Record<MixMode, string> = {
   crossfade: "Crossfade",
@@ -81,6 +115,7 @@ export default function ControlApp() {
     setCrossfade,
     setMixSettings,
     setSceneKey,
+    renameScene,
     cutToA,
     cutToB,
     fadeToA,
@@ -116,6 +151,16 @@ export default function ControlApp() {
   const [workspace, setWorkspace] = useState<Workspace>("perform");
   const [outputDecorated, setOutputDecorated] = useState(false);
   const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
+  const [autoVJ, setAutoVJ] = useState<AutoVJSettings>(defaultAutoVJ);
+  const [autoStatus, setAutoStatus] = useState<AutoVJStatus>(() => ({
+    mood: analyzeAudioMood(emptyAudioAnalysis),
+    lastAction: "Idle",
+    nextTrigger: "Waiting for audio",
+  }));
+  const autoBusyRef = useRef(false);
+  const autoLastBeatRef = useRef(0);
+  const autoLastWallTriggerRef = useRef(0);
+  const autoPrimedRef = useRef(false);
 
   const aiConfig = useAiStore((s) => s.config);
   const aiGenerating = useAiStore((s) => s.generating);
@@ -201,6 +246,157 @@ export default function ControlApp() {
     },
     [aiGenerate, selectedScene, updateSceneCode],
   );
+
+  const updateAutoVJ = useCallback((patch: Partial<AutoVJSettings>) => {
+    setAutoVJ((current) => {
+      const next = { ...current, ...patch };
+      if (patch.enabled !== undefined || patch.intervalBars !== undefined || patch.sceneType !== undefined) {
+        autoLastBeatRef.current = 0;
+        autoLastWallTriggerRef.current = 0;
+        autoPrimedRef.current = false;
+      }
+      return next;
+    });
+  }, []);
+
+  const runAutoVJCycle = useCallback(
+    async (reason: string, mood: AudioMood) => {
+      if (autoBusyRef.current || !autoVJ.enabled || !aiConfig.apiKey) return;
+      autoBusyRef.current = true;
+      setAutoStatus((s) => ({
+        ...s,
+        mood,
+        lastAction: `Generating ${mood.label.toLowerCase()} scene`,
+      }));
+
+      try {
+        const type = pickAutoSceneType(autoVJ.sceneType, mood);
+        const mode = pickAutoMixMode(mood);
+        const prompt = buildAutoPrompt({
+          mood,
+          audio: useVJStore.getState().audio,
+          reason,
+          sceneType: type,
+          currentScenes: useVJStore.getState().scenes,
+        });
+        const code = await aiGenerate(type, prompt);
+
+        addScene(type);
+        const state = useVJStore.getState();
+        const generated = state.scenes[state.scenes.length - 1];
+        if (!generated) return;
+
+        const generatedName = `AI ${mood.label} ${generated.id.replace("scene-", "#")}`;
+        updateSceneCode(generated.id, code);
+        renameScene(generated.id, generatedName);
+        selectScene(generated.id);
+        setMixSettings({ mode, intensity: mood.energy > 0.68 ? 0.9 : 0.72, feather: mood.treble > 0.55 ? 0.045 : 0.09 });
+
+        const liveOnA = state.crossfade < 0.5;
+        if (liveOnA) {
+          setBusB(generated.id);
+          fadeToB();
+        } else {
+          setBusA(generated.id);
+          fadeToA();
+        }
+
+        const after = useVJStore.getState();
+        const extraScenes = after.scenes.filter((scene) => scene.name.startsWith("AI "));
+        if (extraScenes.length > autoVJ.maxScenes) {
+          const protectedIds = new Set([after.busA, after.busB, generated.id]);
+          const removable = extraScenes.find((scene) => !protectedIds.has(scene.id));
+          if (removable) removeScene(removable.id);
+        }
+
+        setAutoStatus({
+          mood,
+          lastAction: `${reason}: ${mixLabels[mode]} to ${generatedName}`,
+          nextTrigger: `After ${autoVJ.intervalBars} bars`,
+        });
+      } catch (e) {
+        setAutoStatus((s) => ({
+          ...s,
+          mood,
+          lastAction: `Auto failed: ${String(e)}`,
+          nextTrigger: "Waiting for next trigger",
+        }));
+      } finally {
+        autoBusyRef.current = false;
+      }
+    },
+    [addScene, aiConfig.apiKey, aiGenerate, autoVJ.enabled, autoVJ.intervalBars, autoVJ.maxScenes, autoVJ.sceneType, fadeToA, fadeToB, removeScene, renameScene, selectScene, setBusA, setBusB, setMixSettings, updateSceneCode],
+  );
+
+  useEffect(() => {
+    const mood = analyzeAudioMood(audio);
+    setAutoStatus((s) => ({
+      ...s,
+      mood,
+      nextTrigger: autoVJ.enabled
+        ? aiConfig.apiKey
+          ? audio.enabled
+            ? s.nextTrigger
+            : "Start audio to drive automation"
+          : "API key required"
+        : "Disabled",
+    }));
+  }, [aiConfig.apiKey, audio, autoVJ.enabled]);
+
+  useEffect(() => {
+    if (!autoVJ.enabled || !aiConfig.apiKey || !audio.enabled) return;
+
+    const mood = analyzeAudioMood(audio);
+    const intervalBeats = Math.max(1, autoVJ.intervalBars * 4);
+    const hasBeatClock = audio.beatCount > 0 && audio.bpm > 0;
+
+    if (hasBeatClock) {
+      if (autoLastBeatRef.current === 0) {
+        autoLastBeatRef.current = audio.beatCount;
+      }
+      const elapsedBeats = audio.beatCount - autoLastBeatRef.current;
+      setAutoStatus((s) => ({
+        ...s,
+        mood,
+        nextTrigger: `${Math.max(0, intervalBeats - elapsedBeats)} beats`,
+      }));
+      if (!autoPrimedRef.current && audio.beat) {
+        autoPrimedRef.current = true;
+        autoLastBeatRef.current = audio.beatCount;
+        void runAutoVJCycle("initial mood lock", mood);
+        return;
+      }
+      if (audio.beat && elapsedBeats >= intervalBeats) {
+        autoLastBeatRef.current = audio.beatCount;
+        void runAutoVJCycle(`${autoVJ.intervalBars} bar refresh`, mood);
+      }
+      return;
+    }
+
+    const now = performance.now();
+    const wallInterval = Math.max(12_000, autoVJ.intervalBars * 8_000);
+    if (autoLastWallTriggerRef.current === 0) autoLastWallTriggerRef.current = now;
+    const remainingMs = Math.max(0, wallInterval - (now - autoLastWallTriggerRef.current));
+    setAutoStatus((s) => ({
+      ...s,
+      mood,
+      nextTrigger: `${Math.ceil(remainingMs / 1000)}s`,
+    }));
+    if (!autoPrimedRef.current || remainingMs <= 0) {
+      const reason = autoPrimedRef.current ? "timed refresh" : "initial mood lock";
+      autoPrimedRef.current = true;
+      autoLastWallTriggerRef.current = now;
+      void runAutoVJCycle(reason, mood);
+    }
+  }, [aiConfig.apiKey, audio, autoVJ.enabled, autoVJ.intervalBars, runAutoVJCycle]);
+
+  useEffect(() => {
+    if (!autoVJ.enabled) {
+      autoLastBeatRef.current = 0;
+      autoLastWallTriggerRef.current = 0;
+      autoPrimedRef.current = false;
+    }
+  }, [autoVJ.enabled]);
 
   const openLedMapping = useCallback(async () => {
     try {
@@ -329,6 +525,8 @@ export default function ControlApp() {
           aiConfig={aiConfig}
           aiGenerating={aiGenerating}
           aiError={aiError}
+          autoVJ={autoVJ}
+          autoStatus={autoStatus}
           outputPreviewRef={outputPreviewRef}
           busACanvasRef={busACanvasRef}
           busBCanvasRef={busBCanvasRef}
@@ -349,6 +547,7 @@ export default function ControlApp() {
           onAiGenerate={handleAiGenerate}
           onAiEdit={selectedScene ? handleAiEdit : undefined}
           onAiConfigChange={aiSetConfig}
+          onAutoVJChange={updateAutoVJ}
           onCodeChange={(code) => selectedScene && updateSceneCode(selectedScene.id, code)}
           onSceneKeyChange={(key) => selectedScene && setSceneKey(selectedScene.id, key)}
           onPickVideo={pickVideoFile}
@@ -473,6 +672,8 @@ function MainWorkspace(props: {
   aiConfig: { baseUrl: string; apiKey: string; model: string };
   aiGenerating: boolean;
   aiError: string | null;
+  autoVJ: AutoVJSettings;
+  autoStatus: AutoVJStatus;
   outputPreviewRef: React.RefObject<HTMLDivElement | null>;
   busACanvasRef: React.RefObject<HTMLCanvasElement | null>;
   busBCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -493,6 +694,7 @@ function MainWorkspace(props: {
   onAiGenerate: (type: SceneType, prompt: string) => void;
   onAiEdit?: (prompt: string) => void;
   onAiConfigChange: (config: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
+  onAutoVJChange: (settings: Partial<AutoVJSettings>) => void;
   onCodeChange: (code: string) => void;
   onSceneKeyChange: (key: SceneKeySettings) => void;
   onPickVideo: () => void;
@@ -625,6 +827,10 @@ function AiCodeWorkspace(props: Parameters<typeof MainWorkspace>[0]) {
           config={props.aiConfig}
           onConfigChange={props.onAiConfigChange}
           selectedScene={props.selectedScene}
+          audio={props.audio}
+          autoVJ={props.autoVJ}
+          autoStatus={props.autoStatus}
+          onAutoVJChange={props.onAutoVJChange}
         />
       </section>
       <section className="code-panel">
@@ -826,7 +1032,7 @@ function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onTog
   );
 }
 
-function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene }: {
+function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene, audio, autoVJ, autoStatus, onAutoVJChange }: {
   generating: boolean;
   error: string | null;
   onGenerate: (type: SceneType, prompt: string) => void;
@@ -834,6 +1040,10 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   config: { baseUrl: string; apiKey: string; model: string };
   onConfigChange: (c: Partial<{ baseUrl: string; apiKey: string; model: string }>) => void;
   selectedScene: Scene | null;
+  audio: AudioAnalysis;
+  autoVJ: AutoVJSettings;
+  autoStatus: AutoVJStatus;
+  onAutoVJChange: (settings: Partial<AutoVJSettings>) => void;
 }) {
   const [prompt, setPrompt] = useState("");
   const [selectedType, setSelectedType] = useState<SceneType>("glsl");
@@ -860,6 +1070,49 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
       <button className="button" disabled={!onEdit || disabled} onClick={() => onEdit?.(prompt.trim())}>
         {selectedScene ? `Edit ${selectedScene.name}` : "Select Scene To Edit"}
       </button>
+      <div className="subpanel auto-vj">
+        <div className="auto-vj__header">
+          <SectionTitle>Auto VJ</SectionTitle>
+          <button
+            className={`button ${autoVJ.enabled ? "is-primary" : ""}`}
+            disabled={!config.apiKey}
+            onClick={() => onAutoVJChange({ enabled: !autoVJ.enabled })}
+          >
+            {autoVJ.enabled ? "Auto On" : "Auto Off"}
+          </button>
+        </div>
+        <InfoGrid rows={[
+          ["Mood", autoStatus.mood.label],
+          ["Energy", autoStatus.mood.energy.toFixed(2)],
+          ["Next", autoStatus.nextTrigger],
+          ["Action", autoStatus.lastAction],
+        ]} />
+        <div className="field">
+          <label>Scene Type</label>
+          <select value={autoVJ.sceneType} onChange={(e) => onAutoVJChange({ sceneType: e.target.value as AutoSceneType })}>
+            <option value="auto">Auto</option>
+            <option value="glsl">GLSL</option>
+            <option value="p5">P5</option>
+            <option value="threejs">Three</option>
+          </select>
+        </div>
+        <MiniSlider label="Bars" value={autoVJ.intervalBars} min={1} max={16} step={1} onChange={(value) => onAutoVJChange({ intervalBars: Math.round(value) })} />
+        <MiniSlider label="Keep AI" value={autoVJ.maxScenes} min={2} max={32} step={1} onChange={(value) => onAutoVJChange({ maxScenes: Math.round(value) })} />
+        <div className="auto-vj__meters">
+          {[
+            ["Bass", autoStatus.mood.bass],
+            ["Mid", autoStatus.mood.mid],
+            ["Treble", autoStatus.mood.treble],
+          ].map(([label, value]) => (
+            <div key={label as string} className="auto-vj__meter">
+              <span>{label}</span>
+              <div><span style={{ width: `${Math.max(2, (value as number) * 100)}%` }} /></div>
+            </div>
+          ))}
+        </div>
+        {!config.apiKey && <p className="help">Set an API key before enabling automation.</p>}
+        {!audio.enabled && <p className="help">Start audio capture for beat-locked switching.</p>}
+      </div>
       <button className="button is-ghost" onClick={() => setShowSettings(!showSettings)}>
         {showSettings ? "Hide API Settings" : "API Settings"}
       </button>
@@ -1051,6 +1304,236 @@ function outputMeta(a: Scene | undefined, b: Scene | undefined, crossfade: numbe
   if (crossfade <= 0.01) return a?.name ?? "Bus A empty";
   if (crossfade >= 0.99) return b?.name ?? "Bus B empty";
   return `${mixLabels[mix.mode]} ${a?.name ?? "empty"} -> ${b?.name ?? "empty"}`;
+}
+
+function bandAverage(values: number[], start: number, end: number): number {
+  const slice = values.slice(start, end);
+  if (slice.length === 0) return 0;
+  return Math.max(0, Math.min(1, slice.reduce((sum, value) => sum + value, 0) / slice.length));
+}
+
+function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
+  const fft = audio.fft.length > 0 ? audio.fft : emptyAudioAnalysis.fft;
+  const bass = bandAverage(fft, 0, 5);
+  const mid = bandAverage(fft, 5, 16);
+  const treble = bandAverage(fft, 16, 32);
+  const bpmEnergy = audio.bpm > 0 ? Math.max(0, Math.min(1, (audio.bpm - 72) / 96)) : 0.35;
+  const spectralEnergy = bass * 0.42 + mid * 0.34 + treble * 0.24;
+  const beatLift = audio.beat ? 0.14 : Math.max(0, 0.08 * (1 - audio.beatPhase));
+  const energy = Math.max(0, Math.min(1, spectralEnergy * 0.72 + bpmEnergy * 0.22 + beatLift));
+  const brightness = treble - bass;
+  const lowTempo = audio.bpm > 0 && audio.bpm < 92;
+  const fastTempo = audio.bpm >= 138;
+  const balancedSpectrum = Math.abs(bass - mid) < 0.12 && Math.abs(mid - treble) < 0.12;
+
+  if (!audio.enabled || audio.permission !== "ready") {
+    return {
+      label: "Standby",
+      energy: 0,
+      bass: 0,
+      mid: 0,
+      treble: 0,
+      palette: "dim monochrome with faint cyan accents",
+      motion: "slow drifting",
+      texture: "minimal particles and soft gradients",
+    };
+  }
+
+  if (fastTempo && treble > 0.48 && bass < 0.44) {
+    return {
+      label: "Hyper Spark",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "white, laser cyan, acid green, and clipped pink",
+      motion: "rapid micro-cuts, jittering streaks, and tight beat subdivisions",
+      texture: "needle lines, pixel sparks, scanlines, and crystalline shards",
+    };
+  }
+  if (energy > 0.72 && bass > 0.48) {
+    return {
+      label: "Peak Drive",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "hot magenta, electric cyan, and hard white flashes",
+      motion: "hard beat-locked pulses with forward momentum",
+      texture: "sharp geometry, tunnels, strobes, and impact rings",
+    };
+  }
+  if (energy > 0.62 && mid > bass + 0.08 && mid > treble + 0.04) {
+    return {
+      label: "Vocal Heat",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "warm amber, saturated red, ivory, and deep violet",
+      motion: "phrased waves, call-and-response pulses, and elastic silhouettes",
+      texture: "ribbons, contour lines, glowing masks, and breathing halos",
+    };
+  }
+  if (energy > 0.58 && brightness > 0.08) {
+    return {
+      label: "Bright Lift",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "aqua, lime, white, and saturated pink highlights",
+      motion: "fast shimmering sweeps and rising arcs",
+      texture: "thin lines, spark fields, prisms, and airy trails",
+    };
+  }
+  if (energy > 0.54 && balancedSpectrum) {
+    return {
+      label: "Full Spectrum",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "full color bands, clean white accents, and saturated primaries",
+      motion: "wide symmetrical expansion with layered beat pulses",
+      texture: "spectrum grids, rotating panels, waveform ribbons, and kaleidoscope folds",
+    };
+  }
+  if (bass > 0.42 && treble < 0.36) {
+    return {
+      label: "Dark Weight",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "deep red, sodium amber, black, and muted blue",
+      motion: "heavy low-frequency breathing and slow pressure waves",
+      texture: "molten blobs, low tunnels, shadows, and bass ripples",
+    };
+  }
+  if (lowTempo && bass > 0.32 && energy < 0.56) {
+    return {
+      label: "Slow Pressure",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "black cherry, low amber, steel blue, and smoke gray",
+      motion: "slow sub-heavy swells with long decays",
+      texture: "viscous waves, compressed fog, large soft rings, and floor-level glow",
+    };
+  }
+  if (treble > 0.42 && energy < 0.5) {
+    return {
+      label: "Glitter Air",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "pale cyan, silver, lavender, and sparse white",
+      motion: "delicate floating shimmer with occasional sparkle bursts",
+      texture: "dust, stars, thin filaments, rippled glass, and soft lens streaks",
+    };
+  }
+  if (energy < 0.34) {
+    return {
+      label: "Ambient Drift",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "indigo, teal, silver, and soft violet",
+      motion: "slow floating parallax and gentle phase shifts",
+      texture: "mist, flowing contours, stars, and liquid gradients",
+    };
+  }
+  if (bass > treble + 0.16) {
+    return {
+      label: "Bass Bounce",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "neon green, cyan, warm orange, and black",
+      motion: "springy low-end bounces and rounded beat impacts",
+      texture: "rubber shapes, blobs, circles, bass meters, and elastic ripples",
+    };
+  }
+  if (mid > 0.34 && treble > 0.34 && bass < 0.34) {
+    return {
+      label: "Percussive Grid",
+      energy,
+      bass,
+      mid,
+      treble,
+      palette: "cool gray, cyan, yellow hits, and red accents",
+      motion: "snappy grid steps, syncopated flashes, and angular sweeps",
+      texture: "tiles, dots, sequencer blocks, tick marks, and sliced panels",
+    };
+  }
+  return {
+    label: "Groove Pulse",
+    energy,
+    bass,
+    mid,
+    treble,
+    palette: "cyan, coral, warm gold, and deep neutral backing",
+    motion: "medium beat pulses with elastic lateral movement",
+    texture: "layered waves, radial motifs, and rhythmic particles",
+  };
+}
+
+function pickAutoSceneType(setting: AutoSceneType, mood: AudioMood): GenerativeSceneType {
+  if (setting !== "auto") return setting;
+  if (mood.label === "Peak Drive" || mood.label === "Dark Weight" || mood.label === "Hyper Spark" || mood.label === "Full Spectrum") return "glsl";
+  if (mood.label === "Ambient Drift" || mood.label === "Slow Pressure") return "threejs";
+  if (mood.label === "Vocal Heat" || mood.label === "Bass Bounce" || mood.label === "Percussive Grid") return "p5";
+  return mood.treble > mood.bass ? "p5" : "glsl";
+}
+
+function pickAutoMixMode(mood: AudioMood): MixMode {
+  if (mood.label === "Hyper Spark") return "rgbSplit";
+  if (mood.label === "Peak Drive") return mood.treble > 0.5 ? "rgbSplit" : "glitch";
+  if (mood.label === "Vocal Heat") return "overlay";
+  if (mood.label === "Bright Lift") return "ripple";
+  if (mood.label === "Full Spectrum") return "diamond";
+  if (mood.label === "Dark Weight") return "luma";
+  if (mood.label === "Slow Pressure") return "wipeUp";
+  if (mood.label === "Glitter Air") return "screen";
+  if (mood.label === "Ambient Drift") return "softLight";
+  if (mood.label === "Bass Bounce") return "circle";
+  if (mood.label === "Percussive Grid") return "wipeRight";
+  return mood.bass > mood.treble ? "circle" : "dissolve";
+}
+
+function buildAutoPrompt(args: {
+  mood: AudioMood;
+  audio: AudioAnalysis;
+  reason: string;
+  sceneType: GenerativeSceneType;
+  currentScenes: Scene[];
+}): string {
+  const recentAiScenes = args.currentScenes
+    .filter((scene) => scene.name.startsWith("AI "))
+    .slice(-4)
+    .map((scene) => `${scene.name} (${scene.type})`)
+    .join(", ") || "none";
+
+  return [
+    "Create a new live VJ scene for the currently playing music.",
+    `Trigger reason: ${args.reason}.`,
+    `Detected mood: ${args.mood.label}.`,
+    `Audio features from the existing Aubio pipeline: BPM ${args.audio.bpm.toFixed(1)}, energy ${args.mood.energy.toFixed(2)}, bass ${args.mood.bass.toFixed(2)}, mid ${args.mood.mid.toFixed(2)}, treble ${args.mood.treble.toFixed(2)}.`,
+    `Visual palette: ${args.mood.palette}.`,
+    `Motion: ${args.mood.motion}.`,
+    `Texture: ${args.mood.texture}.`,
+    `Avoid repeating recent generated scenes: ${recentAiScenes}.`,
+    "Make the scene responsive to the provided audio variables where available.",
+    "Keep it performant for real-time preview and LED output.",
+    args.sceneType === "glsl"
+      ? "Use iBpm, iBeat, iBeatPhase, iBeatCount, and iFft[32] directly in the shader."
+      : "Use the audio object/globals for beat pulses, bass/mid/treble movement, and tempo-aware animation.",
+  ].join("\n");
 }
 
 function sceneTypeLabel(type: SceneType): string {
