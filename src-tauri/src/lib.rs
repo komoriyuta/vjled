@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
+use tauri::WindowEvent;
 
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
@@ -266,6 +267,13 @@ pub fn run() {
             }
             if let Some(control_window) = app.get_webview_window("control") {
                 let _ = configure_camera_webview(&control_window);
+                let app_handle = app.handle().clone();
+                control_window.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        app_handle.exit(0);
+                    }
+                });
             }
             if let Some(mapping_window) = app.get_webview_window("led-mapping") {
                 let _ = configure_camera_webview(&mapping_window);
