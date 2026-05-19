@@ -40,6 +40,9 @@ export const emptyAudioAnalysis: AudioAnalysis = {
   beat: false,
   beatPhase: 0,
   beatCount: 0,
+  genre: null,
+  genreConfidence: 0,
+  musicTags: [],
 };
 
 export const defaultMixSettings: MixSettings = {

@@ -43,6 +43,7 @@ interface AutoVJSettings {
 
 interface AudioMood {
   label: string;
+  tags: string;
   energy: number;
   bass: number;
   mid: number;
@@ -570,6 +571,7 @@ function TopBar({ isPlaying, audio, onTogglePlay }: { isPlaying: boolean; audio:
       <div className="topbar__status">
         <span className="status-chip"><span className={`status-dot ${isPlaying ? "is-live" : ""}`} />{isPlaying ? "LIVE" : "PAUSED"}</span>
         <span className="status-chip">{audio.bpm ? `${audio.bpm.toFixed(1)} BPM` : "NO BPM"}</span>
+        <span className="status-chip">{audio.musicTags.length ? audio.musicTags.slice(0, 3).map((tag) => tag.label.toUpperCase()).join(" / ") : "NO TAGS"}</span>
         <span className="status-chip">{audio.permission.toUpperCase()}</span>
       </div>
       <button className={`button ${isPlaying ? "is-primary" : ""}`} onClick={onTogglePlay}>{isPlaying ? "Pause" : "Go Live"}</button>
@@ -1022,6 +1024,7 @@ function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onTog
         ["Device", audio.deviceLabel || audio.deviceId || "Default"],
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
+        ["Tags", audio.musicTags.length ? audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "No ONNX result"],
       ]} />
       <div className="vu">
         {audio.fft.slice(0, 16).map((v, i) => (
@@ -1083,6 +1086,7 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
         </div>
         <InfoGrid rows={[
           ["Mood", autoStatus.mood.label],
+          ["Tags", autoStatus.mood.tags || "-"],
           ["Energy", autoStatus.mood.energy.toFixed(2)],
           ["Next", autoStatus.nextTrigger],
           ["Action", autoStatus.lastAction],
@@ -1329,6 +1333,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (!audio.enabled || audio.permission !== "ready") {
     return {
       label: "Standby",
+      tags: "",
       energy: 0,
       bass: 0,
       mid: 0,
@@ -1339,170 +1344,115 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
     };
   }
 
-  if (fastTempo && treble > 0.48 && bass < 0.44) {
-    return {
-      label: "Hyper Spark",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "white, laser cyan, acid green, and clipped pink",
-      motion: "rapid micro-cuts, jittering streaks, and tight beat subdivisions",
-      texture: "needle lines, pixel sparks, scanlines, and crystalline shards",
-    };
-  }
-  if (energy > 0.72 && bass > 0.48) {
-    return {
-      label: "Peak Drive",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "hot magenta, electric cyan, and hard white flashes",
-      motion: "hard beat-locked pulses with forward momentum",
-      texture: "sharp geometry, tunnels, strobes, and impact rings",
-    };
-  }
-  if (energy > 0.62 && mid > bass + 0.08 && mid > treble + 0.04) {
-    return {
-      label: "Vocal Heat",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "warm amber, saturated red, ivory, and deep violet",
-      motion: "phrased waves, call-and-response pulses, and elastic silhouettes",
-      texture: "ribbons, contour lines, glowing masks, and breathing halos",
-    };
-  }
-  if (energy > 0.58 && brightness > 0.08) {
-    return {
-      label: "Bright Lift",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "aqua, lime, white, and saturated pink highlights",
-      motion: "fast shimmering sweeps and rising arcs",
-      texture: "thin lines, spark fields, prisms, and airy trails",
-    };
-  }
-  if (energy > 0.54 && balancedSpectrum) {
-    return {
-      label: "Full Spectrum",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "full color bands, clean white accents, and saturated primaries",
-      motion: "wide symmetrical expansion with layered beat pulses",
-      texture: "spectrum grids, rotating panels, waveform ribbons, and kaleidoscope folds",
-    };
-  }
-  if (bass > 0.42 && treble < 0.36) {
-    return {
-      label: "Dark Weight",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "deep red, sodium amber, black, and muted blue",
-      motion: "heavy low-frequency breathing and slow pressure waves",
-      texture: "molten blobs, low tunnels, shadows, and bass ripples",
-    };
-  }
-  if (lowTempo && bass > 0.32 && energy < 0.56) {
-    return {
-      label: "Slow Pressure",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "black cherry, low amber, steel blue, and smoke gray",
-      motion: "slow sub-heavy swells with long decays",
-      texture: "viscous waves, compressed fog, large soft rings, and floor-level glow",
-    };
-  }
-  if (treble > 0.42 && energy < 0.5) {
-    return {
-      label: "Glitter Air",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "pale cyan, silver, lavender, and sparse white",
-      motion: "delicate floating shimmer with occasional sparkle bursts",
-      texture: "dust, stars, thin filaments, rippled glass, and soft lens streaks",
-    };
-  }
-  if (energy < 0.34) {
-    return {
-      label: "Ambient Drift",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "indigo, teal, silver, and soft violet",
-      motion: "slow floating parallax and gentle phase shifts",
-      texture: "mist, flowing contours, stars, and liquid gradients",
-    };
-  }
-  if (bass > treble + 0.16) {
-    return {
-      label: "Bass Bounce",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "neon green, cyan, warm orange, and black",
-      motion: "springy low-end bounces and rounded beat impacts",
-      texture: "rubber shapes, blobs, circles, bass meters, and elastic ripples",
-    };
-  }
-  if (mid > 0.34 && treble > 0.34 && bass < 0.34) {
-    return {
-      label: "Percussive Grid",
-      energy,
-      bass,
-      mid,
-      treble,
-      palette: "cool gray, cyan, yellow hits, and red accents",
-      motion: "snappy grid steps, syncopated flashes, and angular sweeps",
-      texture: "tiles, dots, sequencer blocks, tick marks, and sliced panels",
-    };
-  }
-  return {
-    label: "Groove Pulse",
+  const tags = audio.musicTags.map((tag) => tag.label.toLowerCase());
+  const tagSummary = audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ");
+  const has = (...needles: string[]) => tags.some((tag) => needles.some((needle) => tag.includes(needle)));
+  const vocal = has("vocal");
+
+  const base = {
     energy,
     bass,
     mid,
     treble,
-    palette: "cyan, coral, warm gold, and deep neutral backing",
-    motion: "medium beat pulses with elastic lateral movement",
-    texture: "layered waves, radial motifs, and rhythmic particles",
+  };
+
+  if (has("ambient", "chillout", "chill", "mellow") || energy < 0.34) {
+    return {
+      ...base,
+      label: has("ambient") ? "Ambient Texture" : "Chill Atmosphere",
+      tags: tagSummary,
+      palette: "indigo, teal, silver, soft violet, and muted green",
+      motion: lowTempo ? "slow floating parallax and long phase shifts" : "gentle drifting pulses with restrained beat response",
+      texture: "mist, flowing contours, soft particles, liquid gradients, and wide spatial depth",
+    };
+  }
+  if (has("electronic", "electronica", "electro", "house", "dance") || fastTempo) {
+    return {
+      ...base,
+      label: has("house") ? "House Pulse" : has("electro") ? "Electro Drive" : "Electronic Motion",
+      tags: tagSummary,
+      palette: energy > 0.62 ? "laser cyan, acid green, hot pink, black, and white hits" : "cyan, violet, lime, and dark graphite",
+      motion: fastTempo || energy > 0.6 ? "beat-locked sweeps, tight strobes, sidechain-like expansion, and crisp cuts" : "clean sequenced pulses and gliding looped motion",
+      texture: "vector grids, scanlines, waveform ribbons, sequencer blocks, and luminous trails",
+    };
+  }
+  if (has("metal", "hard rock", "punk", "heavy metal") || (bass > 0.42 && treble < 0.36)) {
+    return {
+      ...base,
+      label: has("punk") ? "Punk Impact" : has("metal") || has("heavy metal") ? "Metal Weight" : "Rock Weight",
+      tags: tagSummary,
+      palette: "deep red, hard white, sodium amber, black, and steel blue",
+      motion: "aggressive beat impacts, pressure waves, sharp camera jolts, and forward thrust",
+      texture: "distressed geometry, molten streaks, cracked panels, sparks, and heavy bass ripples",
+    };
+  }
+  if (has("rock", "alternative", "indie", "guitar", "classic rock", "progressive rock")) {
+    return {
+      ...base,
+      label: has("indie") ? "Indie Color" : has("classic rock") ? "Classic Rock Glow" : "Rock Motion",
+      tags: tagSummary,
+      palette: "coral, cyan, warm gold, dirty white, and deep neutral backing",
+      motion: "riff-like waves, elastic lateral pushes, beat pulses, and guitar-driven arcs",
+      texture: "layered waveforms, radial motifs, feedback trails, posterized bands, and rhythmic particles",
+    };
+  }
+  if (has("hip-hop", "funk", "soul", "rnb")) {
+    return {
+      ...base,
+      label: has("funk") ? "Funk Bounce" : has("soul") || has("rnb") ? "Soul Groove" : "Hip-Hop Bounce",
+      tags: tagSummary,
+      palette: "neon green, cyan, warm orange, deep purple, and black",
+      motion: "springy low-end bounces, rounded beat impacts, call-and-response accents, and syncopated steps",
+      texture: "rubber shapes, bass meters, vinyl rings, warm glows, sliced panels, and elastic ripples",
+    };
+  }
+  if (has("jazz", "blues", "folk", "acoustic", "country", "oldies", "easy listening")) {
+    return {
+      ...base,
+      label: has("jazz") ? "Jazz Flow" : has("acoustic") || has("folk") ? "Acoustic Drift" : "Vintage Groove",
+      tags: tagSummary,
+      palette: "amber, ivory, muted teal, wine red, and smoky gray",
+      motion: "phrased waves, soft swing, slow arcs, and breathing transitions",
+      texture: "grain, contour lines, warm halos, brushed shapes, and analog light leaks",
+    };
+  }
+  if (vocal || has("pop", "catchy", "happy", "party", "sexy")) {
+    return {
+      ...base,
+      label: has("party") || has("dance") ? "Pop Party" : vocal ? "Vocal Pop" : "Pop Shine",
+      tags: tagSummary,
+      palette: "aqua, saturated pink, warm yellow, white, and violet accents",
+      motion: "hook-driven pulses, rising arcs, clean flashes, and bright chorus lifts",
+      texture: "ribbons, spark fields, glossy panels, lyric-like contours, and light blooms",
+    };
+  }
+  return {
+    ...base,
+    label: balancedSpectrum ? "Tagged Spectrum" : brightness > 0.08 ? "Tagged Brightness" : "Tagged Groove",
+    tags: tagSummary,
+    palette: "cyan, coral, warm gold, white accents, and deep neutral backing",
+    motion: "medium beat pulses, elastic lateral movement, and tag-driven variation",
+    texture: "layered waves, radial motifs, spectrum grids, and rhythmic particles",
   };
 }
 
 function pickAutoSceneType(setting: AutoSceneType, mood: AudioMood): GenerativeSceneType {
   if (setting !== "auto") return setting;
-  if (mood.label === "Peak Drive" || mood.label === "Dark Weight" || mood.label === "Hyper Spark" || mood.label === "Full Spectrum") return "glsl";
-  if (mood.label === "Ambient Drift" || mood.label === "Slow Pressure") return "threejs";
-  if (mood.label === "Vocal Heat" || mood.label === "Bass Bounce" || mood.label === "Percussive Grid") return "p5";
+  const label = mood.label.toLowerCase();
+  if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic") || label.includes("jazz")) return "threejs";
+  if (label.includes("pop") || label.includes("vocal") || label.includes("funk") || label.includes("hip-hop") || label.includes("indie")) return "p5";
+  if (label.includes("metal") || label.includes("rock") || label.includes("electro") || label.includes("house")) return "glsl";
   return mood.treble > mood.bass ? "p5" : "glsl";
 }
 
 function pickAutoMixMode(mood: AudioMood): MixMode {
-  if (mood.label === "Hyper Spark") return "rgbSplit";
-  if (mood.label === "Peak Drive") return mood.treble > 0.5 ? "rgbSplit" : "glitch";
-  if (mood.label === "Vocal Heat") return "overlay";
-  if (mood.label === "Bright Lift") return "ripple";
-  if (mood.label === "Full Spectrum") return "diamond";
-  if (mood.label === "Dark Weight") return "luma";
-  if (mood.label === "Slow Pressure") return "wipeUp";
-  if (mood.label === "Glitter Air") return "screen";
-  if (mood.label === "Ambient Drift") return "softLight";
-  if (mood.label === "Bass Bounce") return "circle";
-  if (mood.label === "Percussive Grid") return "wipeRight";
+  const label = mood.label.toLowerCase();
+  if (label.includes("electro") || label.includes("house")) return mood.treble > 0.5 ? "rgbSplit" : "glitch";
+  if (label.includes("metal") || label.includes("rock")) return "luma";
+  if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic")) return "softLight";
+  if (label.includes("pop") || label.includes("vocal")) return "overlay";
+  if (label.includes("hip-hop") || label.includes("funk") || label.includes("soul")) return "circle";
+  if (label.includes("jazz") || label.includes("vintage")) return "screen";
   return mood.bass > mood.treble ? "circle" : "dissolve";
 }
 
@@ -1523,6 +1473,7 @@ function buildAutoPrompt(args: {
     "Create a new live VJ scene for the currently playing music.",
     `Trigger reason: ${args.reason}.`,
     `Detected mood: ${args.mood.label}.`,
+    `Detected music tags: ${args.audio.musicTags.length ? args.audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "unknown"}.`,
     `Audio features from the existing Aubio pipeline: BPM ${args.audio.bpm.toFixed(1)}, energy ${args.mood.energy.toFixed(2)}, bass ${args.mood.bass.toFixed(2)}, mid ${args.mood.mid.toFixed(2)}, treble ${args.mood.treble.toFixed(2)}.`,
     `Visual palette: ${args.mood.palette}.`,
     `Motion: ${args.mood.motion}.`,

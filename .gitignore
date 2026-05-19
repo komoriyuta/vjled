@@ -26,3 +26,7 @@ dist-ssr
 
 src-python
 *.AppImage
+
+# Downloaded ML model weights.
+src-tauri/models/*.onnx
+src-tauri/models/*.tmp

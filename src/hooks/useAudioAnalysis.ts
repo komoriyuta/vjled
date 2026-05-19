@@ -9,6 +9,14 @@ interface RustAudioAnalysis {
   beat: boolean;
   beat_phase: number;
   beat_count: number;
+  genre: string | null;
+  genre_confidence: number;
+  music_tags: MusicTag[];
+}
+
+export interface MusicTag {
+  label: string;
+  confidence: number;
 }
 
 export interface RustAudioDevice {
@@ -43,6 +51,9 @@ export function useAudioAnalysis(): void {
           beat: d.beat,
           beatPhase: d.beat_phase,
           beatCount: d.beat_count,
+          genre: d.genre,
+          genreConfidence: d.genre_confidence,
+          musicTags: d.music_tags ?? [],
         });
       });
       const unlistenError = await listen<string>("audio-error", (ev) => {

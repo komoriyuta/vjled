@@ -1,3 +1,4 @@
+use crate::genre::{GenreClassifier, GenrePrediction, MusicTag};
 use aubio::{OnsetMode, Tempo};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -35,6 +36,9 @@ struct AudioAnalysisPayload {
     beat: bool,
     beat_phase: f64,
     beat_count: u64,
+    genre: Option<String>,
+    genre_confidence: f32,
+    music_tags: Vec<MusicTag>,
 }
 
 fn band_average(magnitude: &[f64], bin_count: usize, start: usize, end: usize) -> f64 {
@@ -161,6 +165,8 @@ struct AnalysisRuntime {
     fft_buffer: Vec<Complex<f64>>,
     sample_buffer: Vec<f32>,
     state: AnalysisState,
+    genre: GenreClassifier,
+    last_genre: Option<GenrePrediction>,
     start_time: std::time::Instant,
     sample_rate: u32,
 }
@@ -173,6 +179,8 @@ impl AnalysisRuntime {
             fft_buffer: vec![Complex::new(0.0, 0.0); FFT_SIZE],
             sample_buffer: Vec::with_capacity(FFT_SIZE * 2),
             state: AnalysisState::new(sample_rate)?,
+            genre: GenreClassifier::new(sample_rate),
+            last_genre: None,
             start_time: std::time::Instant::now(),
             sample_rate,
         })
@@ -181,6 +189,9 @@ impl AnalysisRuntime {
     fn push_mono(&mut self, mono: &[f32], app: &AppHandle) {
         self.sample_buffer.extend_from_slice(mono);
         self.state.feed_aubio(mono, self.start_time.elapsed().as_secs_f64());
+        if let Some(prediction) = self.genre.push_mono(mono) {
+            self.last_genre = Some(prediction);
+        }
 
         while self.sample_buffer.len() >= FFT_SIZE {
             let chunk = &self.sample_buffer[..FFT_SIZE];
@@ -235,6 +246,20 @@ impl AnalysisRuntime {
                     beat: self.state.is_new_beat(),
                     beat_phase: (beat_phase * 10000.0).round() / 10000.0,
                     beat_count: self.state.beat_count,
+                    genre: self
+                        .last_genre
+                        .as_ref()
+                        .map(|prediction| prediction.label.clone()),
+                    genre_confidence: self
+                        .last_genre
+                        .as_ref()
+                        .map(|prediction| (prediction.confidence * 1000.0).round() / 1000.0)
+                        .unwrap_or(0.0),
+                    music_tags: self
+                        .last_genre
+                        .as_ref()
+                        .map(|prediction| prediction.tags.clone())
+                        .unwrap_or_default(),
                 };
 
                 let _ = app.emit("audio-analysis", &payload);

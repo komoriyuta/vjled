@@ -79,6 +79,14 @@ export interface AudioAnalysis {
   beat: boolean;
   beatPhase: number;
   beatCount: number;
+  genre: string | null;
+  genreConfidence: number;
+  musicTags: MusicTag[];
+}
+
+export interface MusicTag {
+  label: string;
+  confidence: number;
 }
 
 export interface DeviceInfo {

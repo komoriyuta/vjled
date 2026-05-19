@@ -29,6 +29,8 @@ cpal = "0.15"
 rustfft = "6"
 aubio = { version = "0.2.1", features = ["bindgen"] }
 crossbeam = "0.8.4"
+tract-onnx = "0.21"
+anyhow = "1"
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

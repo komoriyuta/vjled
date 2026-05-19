@@ -1,6 +1,7 @@
 mod ai;
 mod audio;
 mod calibration;
+mod genre;
 mod led;
 mod video_server;
 
