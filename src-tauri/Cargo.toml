@@ -30,6 +30,7 @@ rustfft = "6"
 aubio = { version = "0.2.1", features = ["bindgen"] }
 crossbeam = "0.8.4"
 tract-onnx = "0.21"
+ort = "2.0.0-rc.12"
 anyhow = "1"
 
 
