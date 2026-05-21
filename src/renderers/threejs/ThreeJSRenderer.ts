@@ -111,6 +111,7 @@ export class ThreeJSRenderer implements Renderer {
       });
     }
     this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
     this.renderer = null;
     this.scene = null;
     this.camera = null;

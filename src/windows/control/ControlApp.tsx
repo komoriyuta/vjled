@@ -3,7 +3,7 @@ import Editor from "@monaco-editor/react";
 import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
 import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
-import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
+import { emitVJAudio, emitVJRuntime, emitVJState, listenVJStateRequest } from "../../events/vjEvents";
 import { sendLedFrame } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
 import { useEngine } from "../../hooks/useEngine";
@@ -14,7 +14,9 @@ import {
   chooseProjectLoadPath,
   chooseProjectSavePath,
   chooseVideoPath,
+  getNativeGpuDiagnostics,
   loadProjectFile,
+  type NativeGpuDiagnostics,
   openLedMappingWindow,
   resolveVideoUrl,
   saveProject,
@@ -80,6 +82,14 @@ interface AutoVJDecision {
   visualDirection?: string;
 }
 
+interface WebGLDiagnostics {
+  supported: boolean;
+  renderer: string;
+  vendor: string;
+  accelerated: boolean;
+  suspicious: boolean;
+}
+
 interface AudioSnapshot {
   at: number;
   bpm: number;
@@ -140,6 +150,7 @@ const mixLabels: Record<MixMode, string> = {
 
 const blendModes: MixMode[] = ["crossfade", "additive", "screen", "multiply", "overlay", "softLight", "difference", "lighten", "darken"];
 const transitionModes: MixMode[] = ["wipeLeft", "wipeRight", "wipeUp", "wipeDown", "circle", "diamond", "dissolve", "luma", "ripple", "glitch", "rgbSplit"];
+const AUDIO_UI_INTERVAL_MS = 250;
 
 const defaultSceneKey: SceneKeySettings = {
   enabled: false,
@@ -148,38 +159,79 @@ const defaultSceneKey: SceneKeySettings = {
   spill: 0.2,
 };
 
+function readWebGLDiagnostics(): WebGLDiagnostics {
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+  if (!gl) {
+    return {
+      supported: false,
+      renderer: "WebGL unavailable",
+      vendor: "unknown",
+      accelerated: false,
+      suspicious: false,
+    };
+  }
+
+  const debug = gl.getExtension("WEBGL_debug_renderer_info");
+  const vendor = debug
+    ? String(gl.getParameter(debug.UNMASKED_VENDOR_WEBGL))
+    : String(gl.getParameter(gl.VENDOR));
+  const renderer = debug
+    ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL))
+    : String(gl.getParameter(gl.RENDERER));
+  const lower = `${vendor} ${renderer}`.toLowerCase();
+  return {
+    supported: true,
+    vendor,
+    renderer,
+    accelerated: !/(swiftshader|llvmpipe|softpipe|software rasterizer|mesa offscreen)/i.test(lower),
+    suspicious: navigator.platform.toLowerCase().includes("linux") && lower.includes("apple"),
+  };
+}
+
 export default function ControlApp() {
-  const {
-    scenes,
-    busA,
-    busB,
-    crossfade,
-    mix,
-    isPlaying,
-    selectedSceneId,
-    addScene,
-    removeScene,
-    updateSceneCode,
-    setSceneRenderPaused,
-    setBusA,
-    setBusB,
-    setCrossfade,
-    setMixSettings,
-    setSceneKey,
-    renameScene,
-    cutToA,
-    cutToB,
-    fadeToA,
-    fadeToB,
-    setPlaying,
-    selectScene,
-    setVideoSync,
-  } = useVJStore();
+  const scenes = useVJStore((s) => s.scenes);
+  const busA = useVJStore((s) => s.busA);
+  const busB = useVJStore((s) => s.busB);
+  const crossfade = useVJStore((s) => s.crossfade);
+  const mix = useVJStore((s) => s.mix);
+  const isPlaying = useVJStore((s) => s.isPlaying);
+  const selectedSceneId = useVJStore((s) => s.selectedSceneId);
+  const addScene = useVJStore((s) => s.addScene);
+  const removeScene = useVJStore((s) => s.removeScene);
+  const updateSceneCode = useVJStore((s) => s.updateSceneCode);
+  const setSceneRenderPaused = useVJStore((s) => s.setSceneRenderPaused);
+  const setBusA = useVJStore((s) => s.setBusA);
+  const setBusB = useVJStore((s) => s.setBusB);
+  const setCrossfade = useVJStore((s) => s.setCrossfade);
+  const setMixSettings = useVJStore((s) => s.setMixSettings);
+  const setSceneKey = useVJStore((s) => s.setSceneKey);
+  const renameScene = useVJStore((s) => s.renameScene);
+  const cutToA = useVJStore((s) => s.cutToA);
+  const cutToB = useVJStore((s) => s.cutToB);
+  const fadeToA = useVJStore((s) => s.fadeToA);
+  const fadeToB = useVJStore((s) => s.fadeToB);
+  const setPlaying = useVJStore((s) => s.setPlaying);
+  const selectScene = useVJStore((s) => s.selectScene);
+  const setVideoSync = useVJStore((s) => s.setVideoSync);
 
   useAudioAnalysis();
+  const [audio, setAudioForUi] = useState(() => useVJStore.getState().audio);
+  const audioUiLastUpdateRef = useRef(0);
+
+  useEffect(() => {
+    return useVJStore.subscribe((state, previous) => {
+      if (state.audio === previous.audio) return;
+      const now = performance.now();
+      const beatChanged = state.audio.beatCount !== previous.audio.beatCount;
+      if (beatChanged || now - audioUiLastUpdateRef.current >= AUDIO_UI_INTERVAL_MS) {
+        audioUiLastUpdateRef.current = now;
+        setAudioForUi(state.audio);
+      }
+    });
+  }, []);
 
   const loadProject = useVJStore((s) => s.loadProject);
-  const audio = useVJStore((s) => s.audio);
   const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
   const setAudioDevice = useVJStore((s) => s.setAudioDevice);
   const ledLoadProject = useLedStore((s) => s.loadProject);
@@ -202,6 +254,8 @@ export default function ControlApp() {
   const [workspace, setWorkspace] = useState<Workspace>("perform");
   const [outputDecorated, setOutputDecorated] = useState(false);
   const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
+  const [webglDiagnostics, setWebglDiagnostics] = useState<WebGLDiagnostics | null>(null);
+  const [nativeGpuDiagnostics, setNativeGpuDiagnostics] = useState<NativeGpuDiagnostics | null>(null);
   const [autoVJ, setAutoVJ] = useState<AutoVJSettings>(defaultAutoVJ);
   const [autoStatus, setAutoStatus] = useState<AutoVJStatus>(() => ({
     mood: analyzeAudioMood(emptyAudioAnalysis),
@@ -217,6 +271,7 @@ export default function ControlApp() {
   const autoSceneStartedAtRef = useRef(0);
   const autoAudioHistoryRef = useRef<AudioSnapshot[]>([]);
   const autoLastSnapshotAtRef = useRef(0);
+  const autoLastStatusAtRef = useRef(0);
   const autoPrimedRef = useRef(false);
 
   const aiConfig = useAiStore((s) => s.config);
@@ -225,6 +280,18 @@ export default function ControlApp() {
   const aiSetConfig = useAiStore((s) => s.setConfig);
   const aiGenerate = useAiStore((s) => s.generate);
   const aiDecideAutoVJ = useAiStore((s) => s.decideAutoVJ);
+
+  useEffect(() => {
+    const diagnostics = readWebGLDiagnostics();
+    setWebglDiagnostics(diagnostics);
+    console.info("[VJLED] WebGL diagnostics", diagnostics);
+    getNativeGpuDiagnostics()
+      .then((nativeDiagnostics) => {
+        setNativeGpuDiagnostics(nativeDiagnostics);
+        console.info("[VJLED] Native GPU diagnostics", nativeDiagnostics);
+      })
+      .catch((error) => console.warn("[VJLED] Native GPU diagnostics unavailable", error));
+  }, []);
 
   const { sendCommand, getVideoInfo } = useEngine({
     outputContainerRef: outputPreviewRef,
@@ -536,21 +603,30 @@ export default function ControlApp() {
           bass: mood.bass,
           mid: mood.mid,
           treble: mood.treble,
-          tags: audio.musicTags.map((tag) => ({ label: tag.label, confidence: tag.confidence })),
+          tags: [
+            ...audio.musicTags.map((tag) => ({ label: tag.label, confidence: tag.confidence })),
+            ...(audio.moodPredictions ?? []).map((mood) => ({
+              label: `Mood:${mood.label}`,
+              confidence: mood.confidence,
+            })),
+          ],
         },
       ], 90);
     }
-    setAutoStatus((s) => ({
-      ...s,
-      mood,
-      nextTrigger: autoVJ.enabled
-        ? aiConfig.apiKey
-          ? audio.enabled
-            ? s.nextTrigger
-            : "Start audio to drive automation"
-          : "API key required"
-        : "Disabled",
-    }));
+    if (now - autoLastStatusAtRef.current >= 250) {
+      autoLastStatusAtRef.current = now;
+      setAutoStatus((s) => ({
+        ...s,
+        mood,
+        nextTrigger: autoVJ.enabled
+          ? aiConfig.apiKey
+            ? audio.enabled
+              ? s.nextTrigger
+              : "Start audio to drive automation"
+            : "API key required"
+          : "Disabled",
+      }));
+    }
   }, [aiConfig.apiKey, audio, autoVJ.enabled]);
 
   useEffect(() => {
@@ -651,9 +727,9 @@ export default function ControlApp() {
   }, [ledConfig.enabled, ledConfig, ledPoints]);
 
   useEffect(() => {
-    const publishState = () => {
+    const buildStatePayload = () => {
       const state = useVJStore.getState();
-      emitVJState({
+      return {
         scenes: state.scenes,
         busA: state.busA,
         busB: state.busB,
@@ -662,10 +738,48 @@ export default function ControlApp() {
         isPlaying: state.isPlaying,
         selectedSceneId: state.selectedSceneId,
         audio: state.audio,
-      });
+      };
     };
 
-    const unsub = useVJStore.subscribe(publishState);
+    const publishState = () => {
+      emitVJState(buildStatePayload());
+    };
+
+    const unsub = useVJStore.subscribe((state, previous) => {
+      if (
+        state.audio !== previous.audio &&
+        state.scenes === previous.scenes &&
+        state.busA === previous.busA &&
+        state.busB === previous.busB &&
+        state.crossfade === previous.crossfade &&
+        state.mix === previous.mix &&
+        state.isPlaying === previous.isPlaying &&
+        state.selectedSceneId === previous.selectedSceneId
+      ) {
+        emitVJAudio(state.audio);
+        return;
+      }
+      if (
+        state.scenes === previous.scenes &&
+        state.audio === previous.audio &&
+        state.busA === previous.busA &&
+        state.busB === previous.busB &&
+        state.selectedSceneId === previous.selectedSceneId &&
+        (
+          state.crossfade !== previous.crossfade ||
+          state.mix !== previous.mix ||
+          state.isPlaying !== previous.isPlaying
+        )
+      ) {
+        emitVJRuntime({
+          crossfade: state.crossfade,
+          mix: state.mix,
+          isPlaying: state.isPlaying,
+        });
+        return;
+      }
+      publishState();
+    });
     const unlistenRequest = listenVJStateRequest(publishState);
     publishState();
 
@@ -707,7 +821,7 @@ export default function ControlApp() {
 
   return (
     <div className="control-shell">
-      <TopBar isPlaying={isPlaying} audio={audio} autoStatus={autoStatus} latestAutoLog={autoLog[0]} onTogglePlay={() => setPlaying(!isPlaying)} />
+      <TopBar isPlaying={isPlaying} audio={audio} autoStatus={autoStatus} latestAutoLog={autoLog[0]} webglDiagnostics={webglDiagnostics} nativeGpuDiagnostics={nativeGpuDiagnostics} onTogglePlay={() => setPlaying(!isPlaying)} />
       <div className="app-grid">
         <SideNav workspace={workspace} onChange={setWorkspace} />
         <ContextPanel
@@ -791,7 +905,20 @@ export default function ControlApp() {
   );
 }
 
-function TopBar({ isPlaying, audio, autoStatus, latestAutoLog, onTogglePlay }: { isPlaying: boolean; audio: AudioAnalysis; autoStatus: AutoVJStatus; latestAutoLog?: AutoVJLogEntry; onTogglePlay: () => void }) {
+function TopBar({ isPlaying, audio, autoStatus, latestAutoLog, webglDiagnostics, nativeGpuDiagnostics, onTogglePlay }: { isPlaying: boolean; audio: AudioAnalysis; autoStatus: AutoVJStatus; latestAutoLog?: AutoVJLogEntry; webglDiagnostics: WebGLDiagnostics | null; nativeGpuDiagnostics: NativeGpuDiagnostics | null; onTogglePlay: () => void }) {
+  const nativeLabel = nativeGpuDiagnostics?.renderer && nativeGpuDiagnostics.renderer !== "unknown"
+    ? nativeGpuDiagnostics.renderer
+    : null;
+  const gpuLabel = webglDiagnostics
+    ? webglDiagnostics.supported
+      ? `${webglDiagnostics.suspicious ? "WEBGL?" : webglDiagnostics.accelerated ? "GPU" : "SW"} ${nativeLabel ?? webglDiagnostics.renderer}`
+      : "NO WEBGL"
+    : "GPU CHECK";
+  const gpuHealthy = !!webglDiagnostics?.supported && !webglDiagnostics.suspicious && webglDiagnostics.accelerated;
+  const gpuTitle = [
+    nativeGpuDiagnostics ? `Native: ${nativeGpuDiagnostics.vendor} / ${nativeGpuDiagnostics.renderer} (${nativeGpuDiagnostics.source})` : null,
+    webglDiagnostics ? `WebGL: ${webglDiagnostics.vendor} / ${webglDiagnostics.renderer}` : null,
+  ].filter(Boolean).join("\n");
   return (
     <header className="topbar">
       <div className="brand">
@@ -803,6 +930,7 @@ function TopBar({ isPlaying, audio, autoStatus, latestAutoLog, onTogglePlay }: {
         <span className="status-chip">{audio.bpm ? `${audio.bpm.toFixed(1)} BPM` : "NO BPM"}</span>
         <span className="status-chip">{audio.musicTags.length ? audio.musicTags.slice(0, 3).map((tag) => tag.label.toUpperCase()).join(" / ") : "NO TAGS"}</span>
         <span className="status-chip status-chip--auto">{latestAutoLog ? `${latestAutoLog.kind}: ${latestAutoLog.message}` : autoStatus.lastAction}</span>
+        <span className={`status-chip ${gpuHealthy ? "status-chip--gpu" : "status-chip--warn"}`} title={gpuTitle || undefined}>{gpuLabel}</span>
         <span className="status-chip">{audio.permission.toUpperCase()}</span>
       </div>
       <button className={`button ${isPlaying ? "is-primary" : ""}`} onClick={onTogglePlay}>{isPlaying ? "Pause" : "Go Live"}</button>
@@ -1590,6 +1718,20 @@ function bandAverage(values: number[], start: number, end: number): number {
   return Math.max(0, Math.min(1, slice.reduce((sum, value) => sum + value, 0) / slice.length));
 }
 
+function formatMoodPredictions(moods: AudioAnalysis["moodPredictions"] | undefined): string {
+  const values = moods ?? [];
+  return values.length
+    ? values.map((mood) => `${mood.label} ${(mood.confidence * 100).toFixed(0)}%`).join(", ")
+    : "unknown";
+}
+
+function primaryEssentiaMood(moods: AudioAnalysis["moodPredictions"] | undefined): string | null {
+  const primary = (moods ?? [])[0];
+  if (!primary || primary.confidence < 0.55) return null;
+  if (primary.label === "Danceable") return "Danceable";
+  return primary.label;
+}
+
 function trimAudioHistory(history: AudioSnapshot[], seconds: number): AudioSnapshot[] {
   const latest = history[history.length - 1]?.at ?? 0;
   return history.filter((snapshot) => latest - snapshot.at <= seconds * 1000);
@@ -1757,6 +1899,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
 
   const tags = audio.musicTags.map((tag) => tag.label.toLowerCase());
   const moodPredictions = audio.moodPredictions ?? [];
+  const primaryMood = primaryEssentiaMood(moodPredictions);
   const moodScores = new Map(moodPredictions.map((mood) => [mood.label.toLowerCase(), mood.confidence]));
   const tagSummary = [
     ...audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`),
@@ -1781,7 +1924,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (has("ambient", "chillout", "chill", "mellow") || relaxed > 0.62 || energy < 0.34) {
     return {
       ...base,
-      label: has("ambient") ? "Ambient Texture" : relaxed > 0.62 ? "Relaxed Atmosphere" : "Chill Atmosphere",
+      label: primaryMood ?? (has("ambient") ? "Ambient Texture" : relaxed > 0.62 ? "Relaxed" : "Chill Atmosphere"),
       tags: tagSummary,
       palette: "indigo, teal, silver, soft violet, and muted green",
       motion: lowTempo ? "slow floating parallax and long phase shifts" : "gentle drifting pulses with restrained beat response",
@@ -1791,7 +1934,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (has("electronic", "electronica", "electro", "house", "dance") || party > 0.62 || fastTempo) {
     return {
       ...base,
-      label: has("house") ? "House Pulse" : party > 0.62 ? "Dance Pulse" : has("electro") ? "Electro Drive" : "Electronic Motion",
+      label: primaryMood ?? (has("house") ? "House Pulse" : party > 0.62 ? "Danceable" : has("electro") ? "Electro Drive" : "Electronic Motion"),
       tags: tagSummary,
       palette: energy > 0.62 ? "laser cyan, acid green, hot pink, black, and white hits" : "cyan, violet, lime, and dark graphite",
       motion: fastTempo || energy > 0.6 ? "beat-locked sweeps, tight strobes, sidechain-like expansion, and crisp cuts" : "clean sequenced pulses and gliding looped motion",
@@ -1801,7 +1944,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (has("metal", "hard rock", "punk", "heavy metal") || aggressive > 0.62 || (bass > 0.42 && treble < 0.36)) {
     return {
       ...base,
-      label: has("punk") ? "Punk Impact" : has("metal") || has("heavy metal") ? "Metal Weight" : aggressive > 0.62 ? "Aggressive Impact" : "Rock Weight",
+      label: primaryMood ?? (has("punk") ? "Punk Impact" : has("metal") || has("heavy metal") ? "Metal Weight" : aggressive > 0.62 ? "Aggressive" : "Rock Weight"),
       tags: tagSummary,
       palette: "deep red, hard white, sodium amber, black, and steel blue",
       motion: "aggressive beat impacts, pressure waves, sharp camera jolts, and forward thrust",
@@ -1841,7 +1984,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (vocal || happy > 0.62 || has("pop", "catchy", "happy", "party", "sexy")) {
     return {
       ...base,
-      label: has("party") || has("dance") || party > 0.62 ? "Pop Party" : vocal ? "Vocal Pop" : happy > 0.62 ? "Happy Shine" : "Pop Shine",
+      label: primaryMood ?? (has("party") || has("dance") || party > 0.62 ? "Pop Party" : vocal ? "Vocal Pop" : happy > 0.62 ? "Happy" : "Pop Shine"),
       tags: tagSummary,
       palette: "aqua, saturated pink, warm yellow, white, and violet accents",
       motion: "hook-driven pulses, rising arcs, clean flashes, and bright chorus lifts",
@@ -1851,7 +1994,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   if (sad > 0.62) {
     return {
       ...base,
-      label: "Melancholic Drift",
+      label: primaryMood ?? "Sad",
       tags: tagSummary,
       palette: "deep blue, silver, muted violet, soft amber, and black",
       motion: "slow downward arcs, delayed pulses, and restrained breathing transitions",
@@ -1860,7 +2003,7 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   }
   return {
     ...base,
-    label: balancedSpectrum ? "Tagged Spectrum" : brightness > 0.08 ? "Tagged Brightness" : "Tagged Groove",
+    label: primaryMood ?? (balancedSpectrum ? "Tagged Spectrum" : brightness > 0.08 ? "Tagged Brightness" : "Tagged Groove"),
     tags: tagSummary,
     palette: "cyan, coral, warm gold, white accents, and deep neutral backing",
     motion: "medium beat pulses, elastic lateral movement, and tag-driven variation",
@@ -1871,14 +2014,19 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
 function pickAutoSceneType(setting: AutoSceneType, mood: AudioMood): GenerativeSceneType {
   if (setting !== "auto") return setting;
   const label = mood.label.toLowerCase();
-  if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic") || label.includes("jazz")) return "threejs";
-  if (label.includes("pop") || label.includes("vocal") || label.includes("funk") || label.includes("hip-hop") || label.includes("indie")) return "p5";
-  if (label.includes("metal") || label.includes("rock") || label.includes("electro") || label.includes("house")) return "glsl";
+  if (label.includes("relaxed") || label.includes("ambient") || label.includes("chill") || label.includes("acoustic") || label.includes("jazz")) return "threejs";
+  if (label.includes("happy") || label.includes("pop") || label.includes("vocal") || label.includes("funk") || label.includes("hip-hop") || label.includes("indie")) return "p5";
+  if (label.includes("danceable") || label.includes("aggressive") || label.includes("metal") || label.includes("rock") || label.includes("electro") || label.includes("house")) return "glsl";
   return mood.treble > mood.bass ? "p5" : "glsl";
 }
 
 function pickAutoMixMode(mood: AudioMood): MixMode {
   const label = mood.label.toLowerCase();
+  if (label.includes("danceable")) return mood.treble > 0.5 ? "rgbSplit" : "glitch";
+  if (label.includes("aggressive")) return "luma";
+  if (label.includes("relaxed")) return "softLight";
+  if (label.includes("happy")) return "overlay";
+  if (label.includes("sad")) return "screen";
   if (label.includes("electro") || label.includes("house")) return mood.treble > 0.5 ? "rgbSplit" : "glitch";
   if (label.includes("metal") || label.includes("rock")) return "luma";
   if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic")) return "softLight";
@@ -1967,6 +2115,7 @@ function buildAutoPrompt(args: {
     "Create a new live VJ scene for the currently playing music.",
     `Trigger reason: ${args.reason}.`,
     `Detected mood: ${args.mood.label}.`,
+    `Essentia mood scores: ${formatMoodPredictions(args.audio.moodPredictions)}.`,
     `Detected genre: ${args.audio.genre}.`,
     `Detected music tags: ${args.audio.musicTags.length ? args.audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "unknown"}.`,
     `Audio features from the existing Aubio pipeline: BPM ${args.audio.bpm.toFixed(1)}, energy ${args.mood.energy.toFixed(2)}, bass ${args.mood.bass.toFixed(2)}, mid ${args.mood.mid.toFixed(2)}, treble ${args.mood.treble.toFixed(2)}.`,
@@ -1983,7 +2132,7 @@ function buildAutoPrompt(args: {
 }
 
 function addGenreHint(prompt: string, audio: AudioAnalysis): string {
-  return `${prompt}\n\nDetected genre: ${audio.genre}.`;
+  return `${prompt}\n\nDetected genre: ${audio.genre}.\nEssentia mood scores: ${formatMoodPredictions(audio.moodPredictions)}.`;
 }
 
 function sceneTypeLabel(type: SceneType): string {

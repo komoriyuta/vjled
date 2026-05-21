@@ -75,6 +75,14 @@ button { color: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.status-chip--gpu,
+.status-chip--warn {
+  max-width: min(360px, 22vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-chip--gpu { border-color: rgba(52, 211, 153, 0.45); color: #a7f3d0; }
+.status-chip--warn { border-color: rgba(245, 158, 11, 0.55); color: #fcd34d; }
 .status-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--dim); }
 .status-dot.is-live { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
 

@@ -14,6 +14,14 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
 
+#[derive(Debug, serde::Serialize)]
+struct NativeGpuDiagnostics {
+    renderer: String,
+    vendor: String,
+    direct_rendering: Option<bool>,
+    source: String,
+}
+
 struct AppState {
     controller: Mutex<Option<MultiDeviceLEDController>>,
     calibrator: Mutex<Calibrator>,
@@ -237,6 +245,47 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn native_gpu_diagnostics() -> NativeGpuDiagnostics {
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+
+        if let Ok(output) = Command::new("glxinfo").arg("-B").output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut renderer = String::from("unknown");
+                let mut vendor = String::from("unknown");
+                let mut direct_rendering = None;
+
+                for line in text.lines() {
+                    if let Some(value) = line.strip_prefix("OpenGL renderer string:") {
+                        renderer = value.trim().to_string();
+                    } else if let Some(value) = line.strip_prefix("OpenGL vendor string:") {
+                        vendor = value.trim().to_string();
+                    } else if let Some(value) = line.strip_prefix("direct rendering:") {
+                        direct_rendering = Some(value.trim().eq_ignore_ascii_case("yes"));
+                    }
+                }
+
+                return NativeGpuDiagnostics {
+                    renderer,
+                    vendor,
+                    direct_rendering,
+                    source: "glxinfo -B".to_string(),
+                };
+            }
+        }
+    }
+
+    NativeGpuDiagnostics {
+        renderer: "unknown".to_string(),
+        vendor: "unknown".to_string(),
+        direct_rendering: None,
+        source: "unavailable".to_string(),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -265,6 +314,7 @@ pub fn run() {
             calibration_detect_led,
             calibration_has_baseline,
             calibration_reset,
+            native_gpu_diagnostics,
         ])
         .setup(|app| {
             let server = video_server::VideoFileServer::start();

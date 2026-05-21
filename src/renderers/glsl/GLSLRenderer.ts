@@ -116,15 +116,13 @@ export class GLSLRenderer implements Renderer {
     const gl = this.gl;
     if (!gl) return;
 
-    if (this.program) {
-      gl.deleteProgram(this.program);
-      this.program = null;
-    }
-
     const source = buildFragmentSource(this.code);
     const prog = createProgram(gl, VERT, source);
     if (!prog) return;
 
+    if (this.program) {
+      gl.deleteProgram(this.program);
+    }
     this.program = prog;
     this.uLocs = {};
     for (const name of ["iTime", "iResolution", "iMouse", "iFrame", "iBpm", "iBeat", "iBeatPhase", "iBeatCount", "iFft"]) {
@@ -174,8 +172,11 @@ export class GLSLRenderer implements Renderer {
     if (this.gl) {
       if (this.program) this.gl.deleteProgram(this.program);
       if (this.quadBuffer) this.gl.deleteBuffer(this.quadBuffer);
+      this.gl.getExtension("WEBGL_lose_context")?.loseContext();
       this.program = null;
       this.quadBuffer = null;
     }
+    this.gl = null;
+    this.canvas = null;
   }
 }

@@ -35,6 +35,17 @@ export function loadProjectFile<T>(path: string): Promise<T> {
   return invoke<T>("project_load", { path });
 }
 
+export interface NativeGpuDiagnostics {
+  renderer: string;
+  vendor: string;
+  directRendering: boolean | null;
+  source: string;
+}
+
+export function getNativeGpuDiagnostics(): Promise<NativeGpuDiagnostics> {
+  return invoke<NativeGpuDiagnostics>("native_gpu_diagnostics");
+}
+
 export async function resolveVideoUrl(path: string): Promise<string> {
   const port = await invoke<number>("get_video_server_port");
   return `http://127.0.0.1:${port}/${path}`;

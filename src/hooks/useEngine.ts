@@ -3,7 +3,7 @@ import type { Scene } from "../types";
 import type { Renderer } from "../renderers/types";
 import { createRenderer } from "../renderers/index";
 import { Compositor } from "../renderers/compositor";
-import { emitVideoCmd, listenVideoCmd, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
+import { emitVideoCmd, listenVideoCmd, listenVJAudio, listenVJRuntime, listenVJState, requestVJState, type VJStatePayload } from "../events/vjEvents";
 import { sendLedFrameFromCanvas } from "../led/pixelExtractor";
 import type { CalibrationPoint, LedConfig } from "../types";
 import { emptyAudioAnalysis } from "../stores/vjStore";
@@ -25,6 +25,9 @@ interface RendererEntry {
   canvas: HTMLCanvasElement;
 }
 
+const SCENE_CARD_PREVIEW_INTERVAL_MS = 250;
+const MAX_SCENE_CARD_PREVIEWS = 8;
+
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
   if (!src || !dst) return;
   const ctx = dst.getContext("2d");
@@ -40,6 +43,22 @@ function clearCanvas(canvas: HTMLCanvasElement | null | undefined) {
 
 function logRendererError(scene: Scene, error: unknown) {
   console.error(`Failed to create renderer for ${scene.name} (${scene.type})`, error);
+}
+
+function rendererStateKey(state: VJStatePayload, previewIds: string[]): string {
+  return JSON.stringify({
+    busA: state.busA,
+    busB: state.busB,
+    selectedSceneId: state.selectedSceneId,
+    previews: previewIds.slice(0, MAX_SCENE_CARD_PREVIEWS),
+    scenes: state.scenes.map((scene) => ({
+      id: scene.id,
+      type: scene.type,
+      code: scene.code,
+      renderPaused: !!scene.renderPaused,
+      videoSync: scene.videoSync,
+    })),
+  });
 }
 
 function compactControlCommands(commands: { action: string; value: unknown }[]) {
@@ -74,6 +93,8 @@ export function useEngine(opts: UseEngineOptions) {
   const codeCacheRef = useRef<Map<string, string>>(new Map());
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
+  const scenePreviewLastUpdateRef = useRef<Map<string, number>>(new Map());
+  const rendererStateKeyRef = useRef("");
   const lastBpmRef = useRef(120);
   const syncVersionRef = useRef(0);
   const disposedRef = useRef(false);
@@ -164,6 +185,13 @@ export function useEngine(opts: UseEngineOptions) {
 
     const unlistenState = listenVJState((state) => {
       stateRef.current = state;
+      const previewIds = [...(scenePreviewCanvasesRef?.current.keys() ?? [])];
+      const nextRendererStateKey = rendererStateKey(state, previewIds);
+      if (nextRendererStateKey === rendererStateKeyRef.current) {
+        return;
+      }
+      rendererStateKeyRef.current = nextRendererStateKey;
+
       const syncVersion = ++syncVersionRef.current;
 
       const { scenes, busA, busB, selectedSceneId } = state;
@@ -173,8 +201,13 @@ export function useEngine(opts: UseEngineOptions) {
       if (busB && activeScenes.some((scene) => scene.id === busB)) activeIds.add(busB);
       const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
       if (hasSelectedPreview && selectedSceneId && activeScenes.some((scene) => scene.id === selectedSceneId)) activeIds.add(selectedSceneId);
+      let previewCount = 0;
       for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
-        if (canvas && activeScenes.some((scene) => scene.id === id)) activeIds.add(id);
+        if (previewCount >= MAX_SCENE_CARD_PREVIEWS) break;
+        if (canvas && activeScenes.some((scene) => scene.id === id)) {
+          activeIds.add(id);
+          previewCount++;
+        }
       }
 
       for (const [id, entry] of renderersRef.current) {
@@ -234,6 +267,22 @@ export function useEngine(opts: UseEngineOptions) {
       entry?.renderer.control?.(action, value);
     });
 
+    const unlistenAudio = listenVJAudio((audio) => {
+      stateRef.current = {
+        ...stateRef.current,
+        audio,
+      };
+    });
+
+    const unlistenRuntime = listenVJRuntime((runtime) => {
+      stateRef.current = {
+        ...stateRef.current,
+        crossfade: runtime.crossfade,
+        mix: runtime.mix,
+        isPlaying: runtime.isPlaying,
+      };
+    });
+
     requestVJState();
 
     let running = true;
@@ -248,13 +297,26 @@ export function useEngine(opts: UseEngineOptions) {
       if (activeBusA) activeRenderIds.add(activeBusA);
       if (activeBusB) activeRenderIds.add(activeBusB);
       if (activeSelectedSceneId) activeRenderIds.add(activeSelectedSceneId);
+      let activePreviewCount = 0;
       for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
-        if (canvas && !sceneById.get(id)?.renderPaused) activeRenderIds.add(id);
+        if (activePreviewCount >= MAX_SCENE_CARD_PREVIEWS) break;
+        if (canvas && !sceneById.get(id)?.renderPaused) {
+          activeRenderIds.add(id);
+          activePreviewCount++;
+        }
       }
       for (const id of activeRenderIds) {
         const scene = sceneById.get(id);
         if (!scene || renderersRef.current.has(id) || loadingRenderersRef.current.has(id)) continue;
         void getOrCreate(scene).catch((error) => logRendererError(scene, error));
+      }
+      for (const [id, entry] of renderersRef.current) {
+        if (activeRenderIds.has(id)) continue;
+        entry.renderer.destroy();
+        entry.canvas.remove();
+        renderersRef.current.delete(id);
+        codeCacheRef.current.delete(id);
+        scenePreviewLastUpdateRef.current.delete(id);
       }
 
       const now = performance.now();
@@ -302,19 +364,6 @@ export function useEngine(opts: UseEngineOptions) {
             updatedIds.add(activeSelectedSceneId);
           }
         }
-        for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
-          if (sceneById.get(id)?.renderPaused) {
-            clearCanvas(canvas);
-            continue;
-          }
-          if (!canvas || updatedIds.has(id)) continue;
-          const entry = renderersRef.current.get(id);
-          if (entry) {
-            entry.renderer.update(time, dt, audio);
-            updatedIds.add(id);
-          }
-        }
-
         const lookup = new Map(scenes.map((s) => [s.id, s]));
         const cA = activeBusA ? renderersRef.current.get(activeBusA)?.canvas ?? null : null;
         const cB = activeBusB ? renderersRef.current.get(activeBusB)?.canvas ?? null : null;
@@ -340,7 +389,19 @@ export function useEngine(opts: UseEngineOptions) {
         }
         for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
           if (sceneById.get(id)?.renderPaused) continue;
-          copyCanvas(renderersRef.current.get(id)?.canvas ?? null, canvas);
+          const entry = renderersRef.current.get(id);
+          if (!entry) {
+            clearCanvas(canvas);
+            continue;
+          }
+          if (!updatedIds.has(id)) {
+            const last = scenePreviewLastUpdateRef.current.get(id) ?? 0;
+            if (now - last >= SCENE_CARD_PREVIEW_INTERVAL_MS) {
+              entry.renderer.update(time, dt, audio);
+              scenePreviewLastUpdateRef.current.set(id, now);
+            }
+          }
+          copyCanvas(entry.canvas, canvas);
         }
 
         if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
@@ -364,6 +425,8 @@ export function useEngine(opts: UseEngineOptions) {
       cancelAnimationFrame(rafRef.current);
       unlistenState.then((fn) => fn());
       unlistenVideoCmd.then((fn) => fn());
+      unlistenAudio.then((fn) => fn());
+      unlistenRuntime.then((fn) => fn());
       for (const [, e] of renderersRef.current) {
         e.renderer.destroy();
         e.canvas.remove();
@@ -372,6 +435,7 @@ export function useEngine(opts: UseEngineOptions) {
       loadingRenderersRef.current.clear();
       codeCacheRef.current.clear();
       controlCacheRef.current.clear();
+      scenePreviewLastUpdateRef.current.clear();
       compositorRef.current?.destroy();
       compositorCanvasRef.current?.remove();
     };
