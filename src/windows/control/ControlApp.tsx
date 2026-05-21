@@ -38,6 +38,10 @@ interface AutoVJSettings {
   enabled: boolean;
   sceneType: AutoSceneType;
   intervalBars: number;
+  decisionSeconds: number;
+  minSceneSeconds: number;
+  generateCooldownSeconds: number;
+  transitionSeconds: number;
   maxScenes: number;
 }
 
@@ -59,10 +63,55 @@ interface AutoVJStatus {
   nextTrigger: string;
 }
 
+interface AutoVJLogEntry {
+  id: number;
+  time: string;
+  kind: AutoVJAction | "TRIGGER" | "GUARD" | "ERROR";
+  message: string;
+}
+
+type AutoVJAction = "KEEP" | "ACCENT" | "SWITCH" | "GENERATE";
+
+interface AutoVJDecision {
+  action: AutoVJAction;
+  confidence: number;
+  reason: string;
+  targetSceneId?: string;
+  visualDirection?: string;
+}
+
+interface AudioSnapshot {
+  at: number;
+  bpm: number;
+  beat: boolean;
+  beatCount: number;
+  energy: number;
+  bass: number;
+  mid: number;
+  treble: number;
+  tags: { label: string; confidence: number }[];
+}
+
+interface AudioSummary {
+  windowSeconds: number;
+  current: AudioSnapshot;
+  averageEnergy: number;
+  energyDelta: number;
+  bpm: number;
+  bpmStable: boolean;
+  topTags: { label: string; confidence: number }[];
+  risingTags: string[];
+  fadingTags: string[];
+}
+
 const defaultAutoVJ: AutoVJSettings = {
   enabled: false,
   sceneType: "auto",
   intervalBars: 4,
+  decisionSeconds: 20,
+  minSceneSeconds: 45,
+  generateCooldownSeconds: 90,
+  transitionSeconds: 4,
   maxScenes: 12,
 };
 
@@ -111,6 +160,7 @@ export default function ControlApp() {
     addScene,
     removeScene,
     updateSceneCode,
+    setSceneRenderPaused,
     setBusA,
     setBusB,
     setCrossfade,
@@ -158,9 +208,15 @@ export default function ControlApp() {
     lastAction: "Idle",
     nextTrigger: "Waiting for audio",
   }));
+  const [autoLog, setAutoLog] = useState<AutoVJLogEntry[]>([]);
   const autoBusyRef = useRef(false);
   const autoLastBeatRef = useRef(0);
   const autoLastWallTriggerRef = useRef(0);
+  const autoLastDecisionAtRef = useRef(0);
+  const autoLastGenerateAtRef = useRef(0);
+  const autoSceneStartedAtRef = useRef(0);
+  const autoAudioHistoryRef = useRef<AudioSnapshot[]>([]);
+  const autoLastSnapshotAtRef = useRef(0);
   const autoPrimedRef = useRef(false);
 
   const aiConfig = useAiStore((s) => s.config);
@@ -168,6 +224,7 @@ export default function ControlApp() {
   const aiError = useAiStore((s) => s.error);
   const aiSetConfig = useAiStore((s) => s.setConfig);
   const aiGenerate = useAiStore((s) => s.generate);
+  const aiDecideAutoVJ = useAiStore((s) => s.decideAutoVJ);
 
   const { sendCommand, getVideoInfo } = useEngine({
     outputContainerRef: outputPreviewRef,
@@ -182,6 +239,18 @@ export default function ControlApp() {
   const selectedScene = scenes.find((s) => s.id === selectedSceneId) ?? null;
   const busAScene = scenes.find((s) => s.id === busA);
   const busBScene = scenes.find((s) => s.id === busB);
+
+  const appendAutoLog = useCallback((kind: AutoVJLogEntry["kind"], message: string) => {
+    const now = new Date();
+    const entry: AutoVJLogEntry = {
+      id: now.getTime() + Math.floor(Math.random() * 1000),
+      time: now.toLocaleTimeString([], { hour12: false }),
+      kind,
+      message,
+    };
+    setAutoLog((current) => [entry, ...current].slice(0, 80));
+    console.info(`[AutoVJ] ${entry.time} ${kind}: ${message}`);
+  }, []);
 
   const handleSave = useCallback(async () => {
     try {
@@ -251,36 +320,154 @@ export default function ControlApp() {
   const updateAutoVJ = useCallback((patch: Partial<AutoVJSettings>) => {
     setAutoVJ((current) => {
       const next = { ...current, ...patch };
-      if (patch.enabled !== undefined || patch.intervalBars !== undefined || patch.sceneType !== undefined) {
+      if (patch.enabled !== undefined || patch.intervalBars !== undefined || patch.decisionSeconds !== undefined || patch.sceneType !== undefined) {
         autoLastBeatRef.current = 0;
         autoLastWallTriggerRef.current = 0;
+        autoLastDecisionAtRef.current = 0;
         autoPrimedRef.current = false;
+      }
+      if (patch.enabled !== undefined) {
+        appendAutoLog("TRIGGER", patch.enabled ? "Auto VJ enabled; waiting for audio/beat trigger" : "Auto VJ disabled");
       }
       return next;
     });
-  }, []);
+  }, [appendAutoLog]);
 
   const runAutoVJCycle = useCallback(
     async (reason: string, mood: AudioMood) => {
       if (autoBusyRef.current || !autoVJ.enabled || !aiConfig.apiKey) return;
+      const now = performance.now();
+      const summary = summarizeAudioHistory(autoAudioHistoryRef.current, mood);
+      const sceneAgeSeconds = autoSceneStartedAtRef.current > 0 ? (now - autoSceneStartedAtRef.current) / 1000 : Number.POSITIVE_INFINITY;
+      const generateCooldownSeconds = autoLastGenerateAtRef.current > 0 ? (now - autoLastGenerateAtRef.current) / 1000 : Number.POSITIVE_INFINITY;
+      appendAutoLog("TRIGGER", `${reason}; mood=${mood.label}; tags=${formatTagList(summary.topTags)}; energy=${summary.current.energy.toFixed(2)} delta=${summary.energyDelta.toFixed(2)}; sceneAge=${formatAge(sceneAgeSeconds)}; genCooldown=${formatAge(generateCooldownSeconds)}`);
       autoBusyRef.current = true;
       setAutoStatus((s) => ({
         ...s,
         mood,
-        lastAction: `Generating ${mood.label.toLowerCase()} scene`,
+        lastAction: `Directing ${mood.label.toLowerCase()}`,
       }));
 
       try {
+        const prompt = buildAutoDecisionPrompt({
+          reason,
+          mood,
+          summary,
+          sceneAgeSeconds,
+          generateCooldownSeconds,
+          minSceneSeconds: autoVJ.minSceneSeconds,
+          generateCooldownLimitSeconds: autoVJ.generateCooldownSeconds,
+          scenes: useVJStore.getState().scenes,
+          busA: useVJStore.getState().busA,
+          busB: useVJStore.getState().busB,
+        });
+        const rawDecision = await aiDecideAutoVJ(prompt);
+        const parsedDecision = parseAutoVJDecision(rawDecision);
+        let decision = normalizeAutoVJDecision(parsedDecision, summary, sceneAgeSeconds, generateCooldownSeconds, autoVJ);
+        appendAutoLog(decision.action, `director=${String(parsedDecision.action ?? "KEEP").toUpperCase()} -> ${decision.action}; conf=${decision.confidence.toFixed(2)}; ${decision.reason}`);
+        const currentState = useVJStore.getState();
+        const hasPlayableScene = currentState.scenes.some((scene) => scene.type !== "video" && !scene.renderPaused);
+        const canGenerateNow = shouldAutoGenerate(sceneAgeSeconds, generateCooldownSeconds, autoVJ);
+        const parseFailed = decision.reason.includes("non-json") || decision.reason.includes("parse failed");
+        if (!hasPlayableScene || (!currentState.busA && !currentState.busB)) {
+          decision = {
+            ...decision,
+            action: "GENERATE",
+            reason: hasPlayableScene ? "no scene is assigned to output" : "no generated scene exists",
+          };
+          appendAutoLog("GUARD", `forced GENERATE: ${decision.reason}`);
+        } else if (parseFailed && canGenerateNow) {
+          decision = {
+            ...decision,
+            action: "GENERATE",
+            confidence: Math.max(decision.confidence, 0.5),
+            reason: "director JSON failed and current scene is stale",
+            visualDirection: `Refresh ${mood.label} using stable tags: ${formatTagList(summary.topTags)}`,
+          };
+          appendAutoLog("GUARD", `non-json fallback to GENERATE; sceneAge=${formatAge(sceneAgeSeconds)} genCooldown=${formatAge(generateCooldownSeconds)}`);
+        }
+
+        if (decision.action === "KEEP") {
+          appendAutoLog("KEEP", decision.reason);
+          setAutoStatus({
+            mood,
+            lastAction: `Keep: ${decision.reason}`,
+            nextTrigger: `~${autoVJ.decisionSeconds}s`,
+          });
+          return;
+        }
+
+        if (decision.action === "ACCENT") {
+          const mode = pickAutoMixMode(mood);
+          setMixSettings({
+            mode,
+            intensity: Math.max(0.52, Math.min(0.95, 0.55 + summary.current.energy * 0.45)),
+            feather: mood.treble > 0.55 ? 0.035 : 0.08,
+          });
+          setAutoStatus({
+            mood,
+            lastAction: `Accent: ${mixLabels[mode]} (${decision.reason})`,
+            nextTrigger: `~${autoVJ.decisionSeconds}s`,
+          });
+          appendAutoLog("ACCENT", `${mixLabels[mode]}; intensity=${Math.max(0.52, Math.min(0.95, 0.55 + summary.current.energy * 0.45)).toFixed(2)}; ${decision.reason}`);
+          return;
+        }
+
+        if (decision.action === "SWITCH") {
+          const state = useVJStore.getState();
+          const target = pickAutoSwitchScene(decision.targetSceneId, state.scenes, state.busA, state.busB, mood);
+          if (target) {
+            const mode = pickAutoMixMode(mood);
+            setMixSettings({ mode, intensity: mood.energy > 0.68 ? 0.88 : 0.68, feather: mood.treble > 0.55 ? 0.04 : 0.09 });
+            const liveOnA = state.crossfade < 0.5;
+            if (liveOnA) {
+              setBusB(target.id);
+              fadeToB(autoVJ.transitionSeconds * 1000);
+            } else {
+              setBusA(target.id);
+              fadeToA(autoVJ.transitionSeconds * 1000);
+            }
+            autoSceneStartedAtRef.current = now;
+            setAutoStatus({
+              mood,
+              lastAction: `Switch: ${target.name} (${decision.reason})`,
+              nextTrigger: `~${autoVJ.decisionSeconds}s`,
+            });
+            appendAutoLog("SWITCH", `${target.name}; mode=${mixLabels[mode]}; ${decision.reason}`);
+            return;
+          }
+          if (canGenerateNow) {
+            decision = {
+              ...decision,
+              action: "GENERATE",
+              reason: "no available scene to switch to; generating a new alternative",
+              visualDirection: decision.visualDirection || `Create an alternative ${mood.label} scene for ${formatTagList(summary.topTags)}`,
+            };
+            appendAutoLog("GUARD", `SWITCH fallback to GENERATE; no available matching scene`);
+          } else {
+          const mode = pickAutoMixMode(mood);
+          setMixSettings({ mode, intensity: 0.62, feather: 0.09 });
+          setAutoStatus({
+            mood,
+            lastAction: `Accent: no matching scene to switch`,
+            nextTrigger: `~${autoVJ.decisionSeconds}s`,
+          });
+          appendAutoLog("GUARD", `SWITCH fallback to ACCENT; no available matching scene`);
+          return;
+          }
+        }
+
         const type = pickAutoSceneType(autoVJ.sceneType, mood);
         const mode = pickAutoMixMode(mood);
-        const prompt = buildAutoPrompt({
+        const generatePrompt = buildAutoPrompt({
           mood,
           audio: useVJStore.getState().audio,
-          reason,
+          reason: `${reason}: ${decision.visualDirection || decision.reason}`,
           sceneType: type,
           currentScenes: useVJStore.getState().scenes,
         });
-        const code = await aiGenerate(type, prompt);
+        const code = await aiGenerate(type, generatePrompt);
+        appendAutoLog("GENERATE", `code generated; type=${type}; direction=${decision.visualDirection || decision.reason}`);
 
         addScene(type);
         const state = useVJStore.getState();
@@ -296,11 +483,13 @@ export default function ControlApp() {
         const liveOnA = state.crossfade < 0.5;
         if (liveOnA) {
           setBusB(generated.id);
-          fadeToB();
+          fadeToB(autoVJ.transitionSeconds * 1000);
         } else {
           setBusA(generated.id);
-          fadeToA();
+          fadeToA(autoVJ.transitionSeconds * 1000);
         }
+        autoSceneStartedAtRef.current = now;
+        autoLastGenerateAtRef.current = now;
 
         const after = useVJStore.getState();
         const extraScenes = after.scenes.filter((scene) => scene.name.startsWith("AI "));
@@ -312,10 +501,12 @@ export default function ControlApp() {
 
         setAutoStatus({
           mood,
-          lastAction: `${reason}: ${mixLabels[mode]} to ${generatedName}`,
-          nextTrigger: `After ${autoVJ.intervalBars} bars`,
-        });
+            lastAction: `Generate: ${mixLabels[mode]} to ${generatedName}`,
+            nextTrigger: `~${autoVJ.decisionSeconds}s`,
+          });
+        appendAutoLog("GENERATE", `${generatedName}; mode=${mixLabels[mode]}; bus=${liveOnA ? "B" : "A"}`);
       } catch (e) {
+        appendAutoLog("ERROR", String(e));
         setAutoStatus((s) => ({
           ...s,
           mood,
@@ -326,11 +517,29 @@ export default function ControlApp() {
         autoBusyRef.current = false;
       }
     },
-    [addScene, aiConfig.apiKey, aiGenerate, autoVJ.enabled, autoVJ.intervalBars, autoVJ.maxScenes, autoVJ.sceneType, fadeToA, fadeToB, removeScene, renameScene, selectScene, setBusA, setBusB, setMixSettings, updateSceneCode],
+    [addScene, aiConfig.apiKey, aiDecideAutoVJ, aiGenerate, appendAutoLog, autoVJ, fadeToA, fadeToB, removeScene, renameScene, selectScene, setBusA, setBusB, setMixSettings, updateSceneCode],
   );
 
   useEffect(() => {
     const mood = analyzeAudioMood(audio);
+    const now = performance.now();
+    if (now - autoLastSnapshotAtRef.current >= 900) {
+      autoLastSnapshotAtRef.current = now;
+      autoAudioHistoryRef.current = trimAudioHistory([
+        ...autoAudioHistoryRef.current,
+        {
+          at: now,
+          bpm: audio.bpm,
+          beat: audio.beat,
+          beatCount: audio.beatCount,
+          energy: mood.energy,
+          bass: mood.bass,
+          mid: mood.mid,
+          treble: mood.treble,
+          tags: audio.musicTags.map((tag) => ({ label: tag.label, confidence: tag.confidence })),
+        },
+      ], 90);
+    }
     setAutoStatus((s) => ({
       ...s,
       mood,
@@ -350,32 +559,35 @@ export default function ControlApp() {
     const mood = analyzeAudioMood(audio);
     const intervalBeats = Math.max(1, autoVJ.intervalBars * 4);
     const hasBeatClock = audio.beatCount > 0 && audio.bpm > 0;
+    const now = performance.now();
 
     if (hasBeatClock) {
       if (autoLastBeatRef.current === 0) {
         autoLastBeatRef.current = audio.beatCount;
       }
       const elapsedBeats = audio.beatCount - autoLastBeatRef.current;
+      const elapsedMs = autoLastDecisionAtRef.current > 0 ? now - autoLastDecisionAtRef.current : Number.POSITIVE_INFINITY;
       setAutoStatus((s) => ({
         ...s,
         mood,
-        nextTrigger: `${Math.max(0, intervalBeats - elapsedBeats)} beats`,
+        nextTrigger: `${Math.max(0, intervalBeats - elapsedBeats)} beats / ${Math.max(0, Math.ceil((autoVJ.decisionSeconds * 1000 - elapsedMs) / 1000))}s`,
       }));
       if (!autoPrimedRef.current && audio.beat) {
         autoPrimedRef.current = true;
         autoLastBeatRef.current = audio.beatCount;
+        autoLastDecisionAtRef.current = now;
         void runAutoVJCycle("initial mood lock", mood);
         return;
       }
-      if (audio.beat && elapsedBeats >= intervalBeats) {
+      if (audio.beat && elapsedBeats >= intervalBeats && elapsedMs >= autoVJ.decisionSeconds * 1000) {
         autoLastBeatRef.current = audio.beatCount;
+        autoLastDecisionAtRef.current = now;
         void runAutoVJCycle(`${autoVJ.intervalBars} bar refresh`, mood);
       }
       return;
     }
 
-    const now = performance.now();
-    const wallInterval = Math.max(12_000, autoVJ.intervalBars * 8_000);
+    const wallInterval = Math.max(5_000, autoVJ.decisionSeconds * 1000);
     if (autoLastWallTriggerRef.current === 0) autoLastWallTriggerRef.current = now;
     const remainingMs = Math.max(0, wallInterval - (now - autoLastWallTriggerRef.current));
     setAutoStatus((s) => ({
@@ -387,14 +599,16 @@ export default function ControlApp() {
       const reason = autoPrimedRef.current ? "timed refresh" : "initial mood lock";
       autoPrimedRef.current = true;
       autoLastWallTriggerRef.current = now;
+      autoLastDecisionAtRef.current = now;
       void runAutoVJCycle(reason, mood);
     }
-  }, [aiConfig.apiKey, audio, autoVJ.enabled, autoVJ.intervalBars, runAutoVJCycle]);
+  }, [aiConfig.apiKey, audio, autoVJ.enabled, autoVJ.intervalBars, autoVJ.decisionSeconds, runAutoVJCycle]);
 
   useEffect(() => {
     if (!autoVJ.enabled) {
       autoLastBeatRef.current = 0;
       autoLastWallTriggerRef.current = 0;
+      autoLastDecisionAtRef.current = 0;
       autoPrimedRef.current = false;
     }
   }, [autoVJ.enabled]);
@@ -463,6 +677,8 @@ export default function ControlApp() {
 
   const assignScene = useCallback(
     (sceneId: string, bus: BusLabel) => {
+      const scene = useVJStore.getState().scenes.find((item) => item.id === sceneId);
+      if (scene?.renderPaused) return;
       if (bus === "A") setBusA(sceneId);
       else setBusB(sceneId);
     },
@@ -491,7 +707,7 @@ export default function ControlApp() {
 
   return (
     <div className="control-shell">
-      <TopBar isPlaying={isPlaying} audio={audio} onTogglePlay={() => setPlaying(!isPlaying)} />
+      <TopBar isPlaying={isPlaying} audio={audio} autoStatus={autoStatus} latestAutoLog={autoLog[0]} onTogglePlay={() => setPlaying(!isPlaying)} />
       <div className="app-grid">
         <SideNav workspace={workspace} onChange={setWorkspace} />
         <ContextPanel
@@ -505,6 +721,7 @@ export default function ControlApp() {
           onAddScene={addScene}
           onAssignScene={assignScene}
           onDeleteScene={removeScene}
+          onRenderPauseScene={setSceneRenderPaused}
           onSelectScene={selectScene}
           onScenePreviewRef={(sceneId, canvas) => {
             if (canvas) scenePreviewCanvasesRef.current.set(sceneId, canvas);
@@ -528,6 +745,7 @@ export default function ControlApp() {
           aiError={aiError}
           autoVJ={autoVJ}
           autoStatus={autoStatus}
+          autoLog={autoLog}
           outputPreviewRef={outputPreviewRef}
           busACanvasRef={busACanvasRef}
           busBCanvasRef={busBCanvasRef}
@@ -557,11 +775,23 @@ export default function ControlApp() {
           onVideoSyncChange={(sync) => selectedScene && setVideoSync(selectedScene.id, sync)}
         />
       </div>
+      <div className="global-transport">
+        <TransportPanel
+          crossfade={crossfade}
+          mix={mix}
+          onCutA={cutToA}
+          onCutB={cutToB}
+          onFadeA={fadeToA}
+          onFadeB={fadeToB}
+          onCrossfade={setCrossfade}
+          onMixChange={setMixSettings}
+        />
+      </div>
     </div>
   );
 }
 
-function TopBar({ isPlaying, audio, onTogglePlay }: { isPlaying: boolean; audio: AudioAnalysis; onTogglePlay: () => void }) {
+function TopBar({ isPlaying, audio, autoStatus, latestAutoLog, onTogglePlay }: { isPlaying: boolean; audio: AudioAnalysis; autoStatus: AutoVJStatus; latestAutoLog?: AutoVJLogEntry; onTogglePlay: () => void }) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -572,6 +802,7 @@ function TopBar({ isPlaying, audio, onTogglePlay }: { isPlaying: boolean; audio:
         <span className="status-chip"><span className={`status-dot ${isPlaying ? "is-live" : ""}`} />{isPlaying ? "LIVE" : "PAUSED"}</span>
         <span className="status-chip">{audio.bpm ? `${audio.bpm.toFixed(1)} BPM` : "NO BPM"}</span>
         <span className="status-chip">{audio.musicTags.length ? audio.musicTags.slice(0, 3).map((tag) => tag.label.toUpperCase()).join(" / ") : "NO TAGS"}</span>
+        <span className="status-chip status-chip--auto">{latestAutoLog ? `${latestAutoLog.kind}: ${latestAutoLog.message}` : autoStatus.lastAction}</span>
         <span className="status-chip">{audio.permission.toUpperCase()}</span>
       </div>
       <button className={`button ${isPlaying ? "is-primary" : ""}`} onClick={onTogglePlay}>{isPlaying ? "Pause" : "Go Live"}</button>
@@ -613,6 +844,7 @@ function ContextPanel(props: {
   onAddScene: (type: SceneType) => void;
   onAssignScene: (sceneId: string, bus: BusLabel) => void;
   onDeleteScene: (id: string) => void;
+  onRenderPauseScene: (id: string, paused: boolean) => void;
   onScenePreviewRef: (sceneId: string, canvas: HTMLCanvasElement | null) => void;
   onSelectScene: (id: string | null) => void;
 }) {
@@ -629,7 +861,7 @@ function ContextPanel(props: {
   );
 }
 
-function SceneLibrary({ scenes, selectedSceneId, busA, busB, onAddScene, onAssignScene, onDeleteScene, onScenePreviewRef, onSelectScene }: Omit<Parameters<typeof ContextPanel>[0], "workspace" | "selectedScene" | "selectedCanvasRef">) {
+function SceneLibrary({ scenes, selectedSceneId, busA, busB, onAddScene, onAssignScene, onDeleteScene, onRenderPauseScene, onScenePreviewRef, onSelectScene }: Omit<Parameters<typeof ContextPanel>[0], "workspace" | "selectedScene" | "selectedCanvasRef">) {
   return (
     <>
       <div className="scene-list">
@@ -642,6 +874,7 @@ function SceneLibrary({ scenes, selectedSceneId, busA, busB, onAddScene, onAssig
             onB={busB === scene.id}
             onSelect={() => onSelectScene(scene.id)}
             onDelete={() => onDeleteScene(scene.id)}
+            onRenderPause={() => onRenderPauseScene(scene.id, !scene.renderPaused)}
             onAssign={(bus) => onAssignScene(scene.id, bus)}
             onPreviewRef={(canvas) => onScenePreviewRef(scene.id, canvas)}
           />
@@ -676,6 +909,7 @@ function MainWorkspace(props: {
   aiError: string | null;
   autoVJ: AutoVJSettings;
   autoStatus: AutoVJStatus;
+  autoLog: AutoVJLogEntry[];
   outputPreviewRef: React.RefObject<HTMLDivElement | null>;
   busACanvasRef: React.RefObject<HTMLCanvasElement | null>;
   busBCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -749,7 +983,6 @@ function PerformanceStage(props: {
           <canvas ref={props.selectedCanvasRef} width={480} height={270} />
         </PreviewFrame>
       </div>
-      <TransportPanel crossfade={props.crossfade} mix={props.mix} onCutA={props.onCutA} onCutB={props.onCutB} onFadeA={props.onFadeA} onFadeB={props.onFadeB} onCrossfade={props.onCrossfade} onMixChange={props.onMixChange} />
     </section>
   );
 }
@@ -795,8 +1028,8 @@ function TransportPanel({ crossfade, mix, onCutA, onCutB, onFadeA, onFadeB, onCr
         <input className="range xfade__range" type="range" min={0} max={1} step={0.005} value={crossfade} onChange={(e) => onCrossfade(parseFloat(e.target.value))} />
       </div>
       <div className="transport__group transport__fade-pair">
-        <button className="button" onClick={onFadeA}>To A</button>
-        <button className="button" onClick={onFadeB}>To B</button>
+        <button className="button" onClick={() => onFadeA()}>To A</button>
+        <button className="button" onClick={() => onFadeB()}>To B</button>
       </div>
       <div className="field transport__mode">
         <label>Mix Mode</label>
@@ -832,6 +1065,7 @@ function AiCodeWorkspace(props: Parameters<typeof MainWorkspace>[0]) {
           audio={props.audio}
           autoVJ={props.autoVJ}
           autoStatus={props.autoStatus}
+          autoLog={props.autoLog}
           onAutoVJChange={props.onAutoVJChange}
         />
       </section>
@@ -897,29 +1131,31 @@ function EmptyState({ children }: { children: React.ReactNode }) {
   return <div className="empty-state"><p className="help">{children}</p></div>;
 }
 
-function SceneCard({ scene, selected, onA, onB, onSelect, onDelete, onAssign, onPreviewRef }: {
+function SceneCard({ scene, selected, onA, onB, onSelect, onDelete, onRenderPause, onAssign, onPreviewRef }: {
   scene: Scene;
   selected: boolean;
   onA: boolean;
   onB: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onRenderPause: () => void;
   onAssign: (bus: BusLabel) => void;
   onPreviewRef: (canvas: HTMLCanvasElement | null) => void;
 }) {
   return (
-    <div className={`scene-card ${selected ? "is-selected" : ""}`} style={{ "--type": typeColors[scene.type] } as React.CSSProperties} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}>
+    <div className={`scene-card ${selected ? "is-selected" : ""} ${scene.renderPaused ? "is-render-paused" : ""}`} style={{ "--type": typeColors[scene.type] } as React.CSSProperties} onClick={onSelect} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}>
       <div className="scene-card__preview">
         <canvas ref={onPreviewRef} width={192} height={108} />
       </div>
       <div className="scene-card__top">
         <span className="scene-card__led" />
         <span className="scene-card__name">{scene.name}</span>
-        <span className="scene-card__badge">{scene.type}</span>
+        <span className="scene-card__badge">{scene.renderPaused ? "paused" : scene.type}</span>
       </div>
       <div className="scene-card__actions">
-        <button className={`button ${onA ? "is-active" : ""}`} style={{ "--active": "var(--cyan)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("A"); }}>A</button>
-        <button className={`button ${onB ? "is-active" : ""}`} style={{ "--active": "var(--rose)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("B"); }}>B</button>
+        <button className={`button ${onA ? "is-active" : ""}`} disabled={scene.renderPaused} style={{ "--active": "var(--cyan)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("A"); }}>A</button>
+        <button className={`button ${onB ? "is-active" : ""}`} disabled={scene.renderPaused} style={{ "--active": "var(--rose)" } as React.CSSProperties} onClick={(e) => { e.stopPropagation(); onAssign("B"); }}>B</button>
+        <button className={`button ${scene.renderPaused ? "is-primary" : ""}`} title={scene.renderPaused ? "Resume rendering" : "Pause rendering without deleting"} onClick={(e) => { e.stopPropagation(); onRenderPause(); }}>{scene.renderPaused ? "Run" : "Stop"}</button>
         <button className="button is-danger" title="Delete scene" onClick={(e) => { e.stopPropagation(); onDelete(); }}>x</button>
       </div>
     </div>
@@ -1035,7 +1271,7 @@ function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onTog
   );
 }
 
-function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene, audio, autoVJ, autoStatus, onAutoVJChange }: {
+function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange, selectedScene, audio, autoVJ, autoStatus, autoLog, onAutoVJChange }: {
   generating: boolean;
   error: string | null;
   onGenerate: (type: SceneType, prompt: string) => void;
@@ -1046,6 +1282,7 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   audio: AudioAnalysis;
   autoVJ: AutoVJSettings;
   autoStatus: AutoVJStatus;
+  autoLog: AutoVJLogEntry[];
   onAutoVJChange: (settings: Partial<AutoVJSettings>) => void;
 }) {
   const [prompt, setPrompt] = useState("");
@@ -1101,6 +1338,10 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
           </select>
         </div>
         <MiniSlider label="Bars" value={autoVJ.intervalBars} min={1} max={16} step={1} onChange={(value) => onAutoVJChange({ intervalBars: Math.round(value) })} />
+        <MiniSlider label="Decision s" value={autoVJ.decisionSeconds} min={10} max={60} step={5} onChange={(value) => onAutoVJChange({ decisionSeconds: Math.round(value) })} />
+        <MiniSlider label="Hold s" value={autoVJ.minSceneSeconds} min={15} max={120} step={5} onChange={(value) => onAutoVJChange({ minSceneSeconds: Math.round(value) })} />
+        <MiniSlider label="Gen Cool s" value={autoVJ.generateCooldownSeconds} min={30} max={240} step={10} onChange={(value) => onAutoVJChange({ generateCooldownSeconds: Math.round(value) })} />
+        <MiniSlider label="Fade s" value={autoVJ.transitionSeconds} min={1} max={12} step={0.5} onChange={(value) => onAutoVJChange({ transitionSeconds: value })} />
         <MiniSlider label="Keep AI" value={autoVJ.maxScenes} min={2} max={32} step={1} onChange={(value) => onAutoVJChange({ maxScenes: Math.round(value) })} />
         <div className="auto-vj__meters">
           {[
@@ -1113,6 +1354,17 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
               <div><span style={{ width: `${Math.max(2, (value as number) * 100)}%` }} /></div>
             </div>
           ))}
+        </div>
+        <div className="auto-vj__log" aria-label="Auto VJ activity log">
+          {autoLog.length ? autoLog.map((entry) => (
+            <div key={entry.id} className={`auto-vj__log-line is-${entry.kind.toLowerCase()}`}>
+              <span>{entry.time}</span>
+              <span>{entry.kind}</span>
+              <span>{entry.message}</span>
+            </div>
+          )) : (
+            <div className="auto-vj__log-empty">No Auto VJ decisions yet.</div>
+          )}
         </div>
         {!config.apiKey && <p className="help">Set an API key before enabling automation.</p>}
         {!audio.enabled && <p className="help">Start audio capture for beat-locked switching.</p>}
@@ -1270,7 +1522,7 @@ function MiniSlider({ label, value, min, max, step, disabled = false, onChange }
     <label className={`mini-slider ${disabled ? "is-disabled" : ""}`}>
       <span>{label}</span>
       <input className="range" disabled={disabled} type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} />
-      <span>{value.toFixed(2)}</span>
+      <span>{step >= 1 ? Math.round(value) : value.toFixed(2)}</span>
     </label>
   );
 }
@@ -1314,6 +1566,143 @@ function bandAverage(values: number[], start: number, end: number): number {
   const slice = values.slice(start, end);
   if (slice.length === 0) return 0;
   return Math.max(0, Math.min(1, slice.reduce((sum, value) => sum + value, 0) / slice.length));
+}
+
+function trimAudioHistory(history: AudioSnapshot[], seconds: number): AudioSnapshot[] {
+  const latest = history[history.length - 1]?.at ?? 0;
+  return history.filter((snapshot) => latest - snapshot.at <= seconds * 1000);
+}
+
+function summarizeAudioHistory(history: AudioSnapshot[], mood: AudioMood): AudioSummary {
+  const fallback: AudioSnapshot = {
+    at: performance.now(),
+    bpm: 0,
+    beat: false,
+    beatCount: 0,
+    energy: mood.energy,
+    bass: mood.bass,
+    mid: mood.mid,
+    treble: mood.treble,
+    tags: [],
+  };
+  const current = history[history.length - 1] ?? fallback;
+  const window = history.length ? history.filter((snapshot) => current.at - snapshot.at <= 30_000) : [current];
+  const recent = window.filter((snapshot) => current.at - snapshot.at <= 10_000);
+  const previous = window.filter((snapshot) => current.at - snapshot.at > 10_000);
+  const averageEnergy = average(window.map((snapshot) => snapshot.energy));
+  const energyDelta = average(recent.map((snapshot) => snapshot.energy)) - average(previous.length ? previous.map((snapshot) => snapshot.energy) : window.map((snapshot) => snapshot.energy));
+  const bpmValues = window.map((snapshot) => snapshot.bpm).filter((bpm) => bpm > 0);
+  const bpm = bpmValues.length ? average(bpmValues) : current.bpm;
+  const bpmStable = bpmValues.length > 4 ? Math.max(...bpmValues) - Math.min(...bpmValues) < 4 : bpm > 0;
+  const topTags = aggregateTags(window);
+  const recentTags = aggregateTags(recent);
+  const previousTags = aggregateTags(previous);
+  const previousByLabel = new Map(previousTags.map((tag) => [tag.label, tag.confidence]));
+  const risingTags = recentTags
+    .filter((tag) => tag.confidence - (previousByLabel.get(tag.label) ?? 0) > 0.08)
+    .slice(0, 3)
+    .map((tag) => tag.label);
+  const recentByLabel = new Map(recentTags.map((tag) => [tag.label, tag.confidence]));
+  const fadingTags = previousTags
+    .filter((tag) => tag.confidence - (recentByLabel.get(tag.label) ?? 0) > 0.08)
+    .slice(0, 3)
+    .map((tag) => tag.label);
+
+  return {
+    windowSeconds: window.length > 1 ? (current.at - window[0].at) / 1000 : 0,
+    current,
+    averageEnergy,
+    energyDelta,
+    bpm,
+    bpmStable,
+    topTags,
+    risingTags,
+    fadingTags,
+  };
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function aggregateTags(history: AudioSnapshot[]): { label: string; confidence: number }[] {
+  const sums = new Map<string, { label: string; total: number; count: number }>();
+  for (const snapshot of history) {
+    for (const tag of snapshot.tags) {
+      const key = tag.label.toLowerCase();
+      const current = sums.get(key) ?? { label: tag.label, total: 0, count: 0 };
+      current.total += tag.confidence;
+      current.count += 1;
+      sums.set(key, current);
+    }
+  }
+  return [...sums.values()]
+    .map((tag) => ({ label: tag.label, confidence: tag.total / tag.count }))
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 6);
+}
+
+function formatTagList(tags: { label: string; confidence: number }[]): string {
+  if (tags.length === 0) return "unknown";
+  return tags.slice(0, 4).map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ");
+}
+
+function formatAge(seconds: number): string {
+  if (!Number.isFinite(seconds)) return "none";
+  return `${seconds.toFixed(0)}s`;
+}
+
+function shouldAutoGenerate(sceneAgeSeconds: number, generateCooldownSeconds: number, settings: AutoVJSettings): boolean {
+  const staleSceneSeconds = Math.max(settings.minSceneSeconds * 2, 120);
+  return sceneAgeSeconds >= staleSceneSeconds && generateCooldownSeconds >= settings.generateCooldownSeconds;
+}
+
+function parseAutoVJDecision(raw: string): Partial<AutoVJDecision> {
+  const jsonStart = raw.indexOf("{");
+  const jsonEnd = raw.lastIndexOf("}");
+  if (jsonStart < 0 || jsonEnd <= jsonStart) {
+    return { action: "KEEP", confidence: 0.2, reason: "director returned non-json" };
+  }
+  try {
+    return JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
+  } catch {
+    return { action: "KEEP", confidence: 0.2, reason: "director json parse failed" };
+  }
+}
+
+function normalizeAutoVJDecision(
+  decision: Partial<AutoVJDecision>,
+  summary: AudioSummary,
+  sceneAgeSeconds: number,
+  generateCooldownSeconds: number,
+  settings: AutoVJSettings,
+): AutoVJDecision {
+  const action = String(decision.action ?? "KEEP").toUpperCase();
+  let normalized: AutoVJAction = action === "ACCENT" || action === "SWITCH" || action === "GENERATE" ? action : "KEEP";
+  const confidence = typeof decision.confidence === "number" ? Math.max(0, Math.min(1, decision.confidence)) : 0.5;
+  let reason = String(decision.reason || "stable music state").slice(0, 140);
+
+  if (sceneAgeSeconds < settings.minSceneSeconds && (normalized === "GENERATE" || normalized === "SWITCH")) {
+    normalized = Math.abs(summary.energyDelta) > 0.18 ? "ACCENT" : "KEEP";
+    reason = `scene hold guard: ${reason}`;
+  }
+  if (normalized === "GENERATE" && generateCooldownSeconds < settings.generateCooldownSeconds) {
+    normalized = Math.abs(summary.energyDelta) > 0.14 ? "SWITCH" : "ACCENT";
+    reason = `generation cooldown: ${reason}`;
+  }
+  if (confidence < 0.35 && normalized !== "KEEP") {
+    normalized = Math.abs(summary.energyDelta) > 0.16 ? "ACCENT" : "KEEP";
+    reason = `low confidence: ${reason}`;
+  }
+
+  return {
+    action: normalized,
+    confidence,
+    reason,
+    targetSceneId: typeof decision.targetSceneId === "string" ? decision.targetSceneId : undefined,
+    visualDirection: typeof decision.visualDirection === "string" ? decision.visualDirection.slice(0, 220) : undefined,
+  };
 }
 
 function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
@@ -1456,6 +1845,68 @@ function pickAutoMixMode(mood: AudioMood): MixMode {
   return mood.bass > mood.treble ? "circle" : "dissolve";
 }
 
+function pickAutoSwitchScene(targetSceneId: string | undefined, scenes: Scene[], busA: string | null, busB: string | null, mood: AudioMood): Scene | null {
+  const liveIds = new Set([busA, busB].filter(Boolean));
+  if (targetSceneId) {
+    const target = scenes.find((scene) => scene.id === targetSceneId && !liveIds.has(scene.id) && !scene.renderPaused);
+    if (target && target.type !== "video") return target;
+  }
+  const preferredType = pickAutoSceneType("auto", mood);
+  const available = scenes
+    .filter((scene) => !liveIds.has(scene.id) && !scene.renderPaused && scene.type !== "video")
+    .sort((a, b) => sceneRecencyScore(b) - sceneRecencyScore(a));
+  return available.find((scene) => scene.name.startsWith("AI ") && scene.type === preferredType)
+    ?? available.find((scene) => scene.type === preferredType)
+    ?? available.find((scene) => scene.name.startsWith("AI "))
+    ?? available[0]
+    ?? null;
+}
+
+function sceneRecencyScore(scene: Scene): number {
+  const match = scene.id.match(/scene-(\d+)/);
+  const idScore = match ? parseInt(match[1], 10) : 0;
+  return idScore + (scene.name.startsWith("AI ") ? 10_000 : 0);
+}
+
+function buildAutoDecisionPrompt(args: {
+  reason: string;
+  mood: AudioMood;
+  summary: AudioSummary;
+  sceneAgeSeconds: number;
+  generateCooldownSeconds: number;
+  minSceneSeconds: number;
+  generateCooldownLimitSeconds: number;
+  scenes: Scene[];
+  busA: string | null;
+  busB: string | null;
+}): string {
+  const sceneLines = args.scenes.map((scene) => {
+    const live = scene.id === args.busA ? "live on A" : scene.id === args.busB ? "live on B" : "available";
+    return `- ${scene.id}: ${scene.name} (${scene.type}, ${scene.renderPaused ? "render paused" : live})`;
+  }).join("\n") || "- none";
+  const tagLine = args.summary.topTags.length
+    ? args.summary.topTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ")
+    : "unknown";
+
+  return [
+    `Trigger candidate: ${args.reason}`,
+    `Current mood: ${args.mood.label}`,
+    `Smoothed tags over ${args.summary.windowSeconds.toFixed(0)}s: ${tagLine}`,
+    `Rising tags: ${args.summary.risingTags.join(", ") || "none"}`,
+    `Fading tags: ${args.summary.fadingTags.join(", ") || "none"}`,
+    `Energy current ${args.summary.current.energy.toFixed(2)}, average ${args.summary.averageEnergy.toFixed(2)}, delta ${args.summary.energyDelta.toFixed(2)}`,
+    `BPM ${args.summary.bpm.toFixed(1)}, stable ${args.summary.bpmStable ? "yes" : "no"}`,
+    `Current scene age ${Number.isFinite(args.sceneAgeSeconds) ? args.sceneAgeSeconds.toFixed(0) : "initial"}s; minimum hold ${args.minSceneSeconds}s`,
+    `Time since last generation ${Number.isFinite(args.generateCooldownSeconds) ? args.generateCooldownSeconds.toFixed(0) : "none"}s; generation cooldown ${args.generateCooldownLimitSeconds}s`,
+    "Scenes:",
+    sceneLines,
+    "Choose KEEP, ACCENT, SWITCH, or GENERATE. SWITCH must include targetSceneId when possible.",
+    "For SWITCH, prefer newer non-paused AI scenes over older scenes, unless the older scene is clearly a better match.",
+    "If the current scene is old, generation cooldown has elapsed, and there is no clearly available non-paused scene to switch to, choose GENERATE.",
+    "Return only strict JSON. Never return plain text.",
+  ].join("\n");
+}
+
 function buildAutoPrompt(args: {
   mood: AudioMood;
   audio: AudioAnalysis;
@@ -1482,7 +1933,7 @@ function buildAutoPrompt(args: {
     "Make the scene responsive to the provided audio variables where available.",
     "Keep it performant for real-time preview and LED output.",
     args.sceneType === "glsl"
-      ? "Use iBpm, iBeat, iBeatPhase, iBeatCount, and iFft[32] directly in the shader."
+      ? "Use WebGL 1 compatible GLSL. Output only helper functions and void mainImage; do not declare uniforms or precision. Use iBpm, iBeat, iBeatPhase, iBeatCount, constant iFft indices like iFft[0]/iFft[16], and fftAt(float) for variable FFT access. Never emit iFft[i], iFft[idx], or iFft[int(x)]. Keep loops literal-bounded and avoid nested loops when possible."
       : "Use the audio object/globals for beat pulses, bass/mid/treble movement, and tempo-aware animation.",
   ].join("\n");
 }

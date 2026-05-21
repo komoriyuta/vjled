@@ -183,6 +183,16 @@ async fn ai_generate(
 }
 
 #[tauri::command]
+async fn ai_decide_auto_vj(
+    base_url: String,
+    api_key: String,
+    model: String,
+    prompt: String,
+) -> Result<String, String> {
+    ai::decide_auto_vj(&base_url, &api_key, &model, &prompt).await
+}
+
+#[tauri::command]
 fn project_save(path: String, data: serde_json::Value) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&data)
         .map_err(|e| format!("Serialize error: {}", e))?;
@@ -236,6 +246,7 @@ pub fn run() {
             camera_prepare_window,
             get_video_server_port,
             ai_generate,
+            ai_decide_auto_vj,
             project_save,
             project_load,
             audio_list_devices,

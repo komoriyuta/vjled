@@ -8,6 +8,7 @@ interface VJStore extends VJState {
   removeScene: (id: string) => void;
   updateSceneCode: (id: string, code: string) => void;
   renameScene: (id: string, name: string) => void;
+  setSceneRenderPaused: (id: string, paused: boolean) => void;
   setBusA: (id: string | null) => void;
   setBusB: (id: string | null) => void;
   setCrossfade: (v: number) => void;
@@ -16,8 +17,8 @@ interface VJStore extends VJState {
   setSceneKey: (sceneId: string, key: SceneKeySettings) => void;
   cutToA: () => void;
   cutToB: () => void;
-  fadeToA: () => void;
-  fadeToB: () => void;
+  fadeToA: (durationMs?: number) => void;
+  fadeToB: (durationMs?: number) => void;
   setPlaying: (p: boolean) => void;
   selectScene: (id: string | null) => void;
   setAudioDevices: (devices: AudioInputDevice[]) => void;
@@ -101,6 +102,13 @@ export const useVJStore = create<VJStore>((set, get) => ({
       scenes: s.scenes.map((sc) => (sc.id === id ? { ...sc, name } : sc)),
     })),
 
+  setSceneRenderPaused: (id, paused) =>
+    set((s) => ({
+      scenes: s.scenes.map((sc) => (sc.id === id ? { ...sc, renderPaused: paused } : sc)),
+      busA: paused && s.busA === id ? null : s.busA,
+      busB: paused && s.busB === id ? null : s.busB,
+    })),
+
   setBusA: (id) => set({ busA: id }),
   setBusB: (id) => set({ busB: id }),
   setCrossfade: (v) => set({ crossfade: Math.max(0, Math.min(1, v)) }),
@@ -125,10 +133,10 @@ export const useVJStore = create<VJStore>((set, get) => ({
   cutToA: () => set({ crossfade: 0 }),
   cutToB: () => set({ crossfade: 1 }),
 
-  fadeToA: () => {
+  fadeToA: (durationMs = 1000) => {
     const start = get().crossfade;
     const startT = performance.now();
-    const dur = 1000;
+    const dur = Number.isFinite(durationMs) ? Math.max(50, durationMs) : 1000;
     const step = () => {
       const t = Math.min(1, (performance.now() - startT) / dur);
       const ease = t * (2 - t);
@@ -138,10 +146,10 @@ export const useVJStore = create<VJStore>((set, get) => ({
     requestAnimationFrame(step);
   },
 
-  fadeToB: () => {
+  fadeToB: (durationMs = 1000) => {
     const start = get().crossfade;
     const startT = performance.now();
-    const dur = 1000;
+    const dur = Number.isFinite(durationMs) ? Math.max(50, durationMs) : 1000;
     const step = () => {
       const t = Math.min(1, (performance.now() - startT) / dur);
       const ease = t * (2 - t);

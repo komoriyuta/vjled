@@ -45,6 +45,7 @@ export interface Scene {
   name: string;
   type: SceneType;
   code: string;
+  renderPaused?: boolean;
   videoSync?: VideoSync;
   key?: SceneKeySettings;
 }
