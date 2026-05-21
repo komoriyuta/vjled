@@ -4,6 +4,7 @@ import type {
   CalibrationPoint,
   LedConfig,
   LayoutInfo,
+  MappingHandle,
   MixMode,
   MixSettings,
   Scene,
@@ -42,6 +43,8 @@ export interface ProjectData {
     config: LedConfig;
     calibrationPoints: CalibrationPoint[];
     layoutInfo: LayoutInfo | null;
+    mappingHandles?: MappingHandle[];
+    rawCameraPoints?: CalibrationPoint[];
   };
   ai: ProjectAiSettings;
 }
@@ -52,6 +55,8 @@ export interface ParsedProject {
     config: LedConfig;
     calibrationPoints: CalibrationPoint[];
     layoutInfo: LayoutInfo | null;
+    mappingHandles: MappingHandle[];
+    rawCameraPoints: CalibrationPoint[];
   };
   ai: ProjectAiSettings | null;
 }
@@ -198,6 +203,22 @@ function parseCalibrationPoints(value: unknown): CalibrationPoint[] {
   });
 }
 
+const defaultMappingHandles: MappingHandle[] = [
+  [0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85],
+];
+
+function parseMappingHandles(value: unknown): MappingHandle[] {
+  if (!Array.isArray(value) || value.length !== 4) return defaultMappingHandles;
+  const parsed = value.map((item) => {
+    if (!Array.isArray(item) || item.length !== 2) return null;
+    const x = finiteNumber(item[0], NaN);
+    const y = finiteNumber(item[1], NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))] as MappingHandle;
+  });
+  return parsed.every(Boolean) ? parsed as MappingHandle[] : defaultMappingHandles;
+}
+
 function parseLayoutInfo(value: unknown): LayoutInfo | null {
   if (!isRecord(value) || !Array.isArray(value.devices)) return null;
   return {
@@ -225,7 +246,13 @@ function parseAiSettings(value: unknown): ProjectAiSettings | null {
 
 export function createProjectData(args: {
   vj: VJState;
-  led: { config: LedConfig; calibrationPoints: CalibrationPoint[]; layoutInfo: LayoutInfo | null };
+  led: {
+    config: LedConfig;
+    calibrationPoints: CalibrationPoint[];
+    layoutInfo: LayoutInfo | null;
+    mappingHandles?: MappingHandle[];
+    rawCameraPoints?: CalibrationPoint[];
+  };
   ai: ProjectAiSettings;
 }): ProjectData {
   return {
@@ -250,6 +277,8 @@ export function createProjectData(args: {
       config: args.led.config,
       calibrationPoints: args.led.calibrationPoints,
       layoutInfo: args.led.layoutInfo,
+      mappingHandles: args.led.mappingHandles,
+      rawCameraPoints: args.led.rawCameraPoints,
     },
     ai: args.ai,
   };
@@ -287,6 +316,8 @@ export function parseProjectData(raw: unknown, fallbackLedConfig: LedConfig): Pa
       config: parseLedConfig(ledRaw.config, fallbackLedConfig),
       calibrationPoints: parseCalibrationPoints(ledRaw.calibrationPoints),
       layoutInfo: parseLayoutInfo(ledRaw.layoutInfo),
+      mappingHandles: parseMappingHandles(ledRaw.mappingHandles),
+      rawCameraPoints: parseCalibrationPoints(ledRaw.rawCameraPoints),
     },
     ai: parseAiSettings(root.ai),
   };

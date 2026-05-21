@@ -180,7 +180,7 @@ LEDランタンの物理位置をカメラ画像上で自動特定する:
 **パケット構造**:
 
 ```
-Header (8 bytes):
+Header (9 bytes):
   device_id   : uint16 LE
   command     : uint8
   flags       : uint8

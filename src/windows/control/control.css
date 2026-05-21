@@ -78,6 +78,9 @@ button { color: inherit; }
   grid-template-columns: 76px 260px minmax(0, 1fr);
   overflow: hidden;
 }
+.app-grid.is-led {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
 
 .side-nav {
   min-height: 0;
@@ -217,6 +220,9 @@ button { color: inherit; }
   overflow: hidden;
   background: var(--surface-low);
 }
+.main-workspace.is-led {
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+}
 .stage {
   min-height: 0;
   min-width: 0;
@@ -224,6 +230,14 @@ button { color: inherit; }
   grid-template-rows: minmax(260px, 1fr) 128px 72px;
   gap: 10px;
   padding: 10px;
+}
+.stage.is-led {
+  grid-template-rows: minmax(140px, 220px);
+  align-content: start;
+  padding: 10px 0 10px 10px;
+}
+.stage.is-led .preview-frame {
+  max-height: 220px;
 }
 .bus-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; min-height: 0; }
 .render-mount { width: 100%; height: 100%; }
@@ -527,7 +541,161 @@ button { color: inherit; }
   border-radius: 4px;
 }
 .vu__bar { min-height: 3px; }
-.led-feature { overflow: hidden; }
+.led-feature {
+  overflow: auto;
+  min-width: 0;
+}
+.led-feature__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.led-feature__grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.led-feature .subpanel {
+  min-width: 0;
+}
+.led-layout-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.led-path {
+  min-height: 30px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #0b0d0f;
+  color: var(--muted);
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.led-config-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(74px, 0.7fr));
+  gap: 8px;
+}
+.led-calibration-panel {
+  grid-column: 1 / -1;
+}
+.led-calibration-panel__body {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.2fr) minmax(240px, 0.8fr);
+  gap: 10px;
+  align-items: start;
+}
+.led-calibration-panel__controls {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.led-map-preview {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-height: 120px;
+  min-height: 90px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #050507;
+  overflow: hidden;
+}
+.led-map-preview svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+}
+.led-map-preview__shape {
+  fill: rgba(124, 92, 252, 0.12);
+  stroke: rgba(124, 92, 252, 0.9);
+  stroke-width: 0.5;
+  pointer-events: none;
+}
+.led-map-preview__raw {
+  fill: var(--green);
+  pointer-events: none;
+}
+.led-map-preview__handle {
+  fill: var(--cyan);
+  stroke: #ffffff;
+  stroke-width: 0.9;
+  cursor: grab;
+  vector-effect: non-scaling-stroke;
+}
+.led-map-preview__handle:hover,
+.led-map-preview__handle:focus {
+  fill: #ffffff;
+  outline: none;
+}
+.led-map-preview__handle:active {
+  cursor: grabbing;
+}
+.led-corner-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.led-corner-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+.led-corner-row input {
+  min-height: 28px;
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #0b0d0f;
+  color: var(--text);
+  padding: 5px;
+}
+.led-camera-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.led-camera-preview {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-height: 230px;
+  min-height: 170px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #050507;
+  overflow: hidden;
+}
+.led-camera-preview video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
+}
+.led-camera-preview svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+}
 .led-panel-mount { flex: 1; min-height: 0; border: 1px solid var(--border); overflow: hidden; }
 .video-editor { height: 100%; display: flex; flex-direction: column; gap: 12px; padding: 14px; background: #111; }
 .video-editor__file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
@@ -536,8 +704,30 @@ button { color: inherit; }
 
 @media (max-width: 1100px) {
   .app-grid { grid-template-columns: 68px 220px minmax(0, 1fr); }
+  .app-grid.is-led { grid-template-columns: 68px minmax(0, 1fr); }
   .main-workspace { grid-template-columns: minmax(0, 1fr); }
+  .main-workspace.is-led { grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .transport { grid-template-columns: 1fr; }
   .key-panel { grid-template-columns: 1fr; }
   .feature-panel { border-left: 0; border-top: 1px solid var(--border); max-height: 220px; }
+  .main-workspace.is-led .feature-panel { border-left: 1px solid var(--border); border-top: 0; max-height: none; }
+  .led-feature__grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+  .led-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .led-calibration-panel__body { grid-template-columns: minmax(260px, 1fr) minmax(220px, 0.8fr); }
+  .led-camera-preview { max-height: 190px; min-height: 150px; }
+  .stage.is-led { grid-template-rows: minmax(120px, 180px); padding: 10px 0 10px 10px; }
+}
+
+@media (max-width: 760px) {
+  .main-workspace.is-led {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .main-workspace.is-led .feature-panel {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+  .led-feature__grid { grid-template-columns: 1fr; }
+  .led-calibration-panel__body { grid-template-columns: 1fr; }
+  .stage.is-led { grid-template-rows: 140px; padding: 10px; }
 }

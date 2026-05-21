@@ -3,19 +3,30 @@ import Editor from "@monaco-editor/react";
 import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
 import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
-import { emitVJState, listenVJStateRequest } from "../../events/vjEvents";
-import { sendLedFrame } from "../../led/pixelExtractor";
+import { emitLedState, emitVJState, listenLedState, listenLedStateRequest, listenVJStateRequest } from "../../events/vjEvents";
+import {
+  calibrationDetectLed,
+  calibrationReset,
+  calibrationSetBaseline,
+  ledAllOff,
+  ledFill,
+  ledInitSimple,
+  ledLoadLayout,
+  ledSetPixel,
+} from "../../led/commands";
+import { attachCameraStream, listCalibrationCameras, startCalibrationCamera, type CameraDevice } from "../../led/camera";
+import { mapCameraToVideo } from "../../led/mapping";
+import { rgbaFromCanvas } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
 import { useEngine } from "../../hooks/useEngine";
 import { createProjectData, parseProjectData } from "../../project";
 import type { AudioAnalysis, BusLabel, MixMode, MixSettings, Scene, SceneKeySettings, SceneType, VideoSync } from "../../types";
-import LedPanel from "../../components/LedPanel";
 import {
   chooseProjectLoadPath,
   chooseProjectSavePath,
+  chooseLayoutPath,
   chooseVideoPath,
   loadProjectFile,
-  openLedMappingWindow,
   resolveVideoUrl,
   saveProject,
   toggleOutputDecorations as toggleTauriOutputDecorations,
@@ -132,8 +143,6 @@ export default function ControlApp() {
   const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
   const setAudioDevice = useVJStore((s) => s.setAudioDevice);
   const ledLoadProject = useLedStore((s) => s.loadProject);
-  const ledConfig = useLedStore((s) => s.config);
-  const ledPoints = useLedStore((s) => s.calibrationPoints);
 
   const outputPreviewRef = useRef<HTMLDivElement>(null);
   const busACanvasRef = useRef<HTMLCanvasElement>(null);
@@ -142,7 +151,6 @@ export default function ControlApp() {
   const contextSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const codeSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const scenePreviewCanvasesRef = useRef<Map<string, HTMLCanvasElement | null>>(new Map());
-  const ledFrameRef = useRef(0);
   const selectedPreviewRefs = useMemo(
     () => [contextSelectedCanvasRef, codeSelectedCanvasRef],
     [],
@@ -150,7 +158,6 @@ export default function ControlApp() {
 
   const [workspace, setWorkspace] = useState<Workspace>("perform");
   const [outputDecorated, setOutputDecorated] = useState(false);
-  const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
   const [autoVJ, setAutoVJ] = useState<AutoVJSettings>(defaultAutoVJ);
   const [autoStatus, setAutoStatus] = useState<AutoVJStatus>(() => ({
     mood: analyzeAudioMood(emptyAudioAnalysis),
@@ -195,6 +202,8 @@ export default function ControlApp() {
           config: led.config,
           calibrationPoints: led.calibrationPoints,
           layoutInfo: led.layoutInfo,
+          mappingHandles: led.mappingHandles,
+          rawCameraPoints: led.rawCameraPoints,
         },
         ai: {
           baseUrl: ai.config.baseUrl,
@@ -213,7 +222,16 @@ export default function ControlApp() {
       const rawProject = await loadProjectFile<unknown>(path);
       const project = parseProjectData(rawProject, useLedStore.getState().config);
       loadProject(project.vj);
-      ledLoadProject(project.led.config, project.led.calibrationPoints, project.led.layoutInfo);
+      ledLoadProject(project.led.config, project.led.calibrationPoints, project.led.layoutInfo, project.led.mappingHandles, project.led.rawCameraPoints);
+      emitLedState({
+        source: "control",
+        config: project.led.config,
+        calibrationPoints: project.led.calibrationPoints,
+        layoutInfo: project.led.layoutInfo,
+        mappingHandles: project.led.mappingHandles,
+        rawCameraPoints: project.led.rawCameraPoints,
+        connected: false,
+      });
       if (project.ai) aiSetConfig(project.ai);
     } catch (e) {
       console.error("Load failed:", e);
@@ -398,43 +416,6 @@ export default function ControlApp() {
     }
   }, [autoVJ.enabled]);
 
-  const openLedMapping = useCallback(async () => {
-    try {
-      setLedMappingStatus("Opening calibration window...");
-      const status = await openLedMappingWindow();
-      setLedMappingStatus(status === "focused" ? "Calibration window focused" : "Calibration window open");
-    } catch (e) {
-      setLedMappingStatus(`Failed to open calibration window: ${String(e)}`);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!ledConfig.enabled || ledPoints.length === 0) return;
-    let running = true;
-    let lastSend = 0;
-    const interval = 1000 / 30;
-
-    const loop = () => {
-      if (!running) return;
-      const now = performance.now();
-      if (now - lastSend >= interval) {
-        lastSend = now;
-        const canvas = outputPreviewRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
-        const ctx = canvas?.getContext("2d");
-        if (canvas && ctx) {
-          sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
-        }
-      }
-      ledFrameRef.current = requestAnimationFrame(loop);
-    };
-    ledFrameRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      running = false;
-      cancelAnimationFrame(ledFrameRef.current);
-    };
-  }, [ledConfig.enabled, ledConfig, ledPoints]);
-
   useEffect(() => {
     const publishState = () => {
       const state = useVJStore.getState();
@@ -457,6 +438,41 @@ export default function ControlApp() {
     return () => {
       unsub();
       unlistenRequest.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const publishLedState = () => {
+      const led = useLedStore.getState();
+      emitLedState({
+        source: "control",
+        config: led.config,
+        calibrationPoints: led.calibrationPoints,
+        layoutInfo: led.layoutInfo,
+        mappingHandles: led.mappingHandles,
+        rawCameraPoints: led.rawCameraPoints,
+        connected: led.connected,
+      });
+    };
+
+    const unsub = useLedStore.subscribe(publishLedState);
+    const unlistenRequest = listenLedStateRequest(publishLedState);
+    publishLedState();
+
+    return () => {
+      unsub();
+      unlistenRequest.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listenLedState((state) => {
+      if (state.source === "control") return;
+      const led = useLedStore.getState();
+      led.loadSyncedState(state.config, state.calibrationPoints, state.layoutInfo, state.connected, state.mappingHandles, state.rawCameraPoints);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -491,25 +507,27 @@ export default function ControlApp() {
   return (
     <div className="control-shell">
       <TopBar isPlaying={isPlaying} audio={audio} onTogglePlay={() => setPlaying(!isPlaying)} />
-      <div className="app-grid">
+      <div className={`app-grid ${workspace === "led" ? "is-led" : ""}`}>
         <SideNav workspace={workspace} onChange={setWorkspace} />
-        <ContextPanel
-          workspace={workspace}
-          scenes={scenes}
-          selectedScene={selectedScene}
-          selectedSceneId={selectedSceneId}
-          busA={busA}
-          busB={busB}
-          selectedCanvasRef={contextSelectedCanvasRef}
-          onAddScene={addScene}
-          onAssignScene={assignScene}
-          onDeleteScene={removeScene}
-          onSelectScene={selectScene}
-          onScenePreviewRef={(sceneId, canvas) => {
-            if (canvas) scenePreviewCanvasesRef.current.set(sceneId, canvas);
-            else scenePreviewCanvasesRef.current.delete(sceneId);
-          }}
-        />
+        {workspace !== "led" && (
+          <ContextPanel
+            workspace={workspace}
+            scenes={scenes}
+            selectedScene={selectedScene}
+            selectedSceneId={selectedSceneId}
+            busA={busA}
+            busB={busB}
+            selectedCanvasRef={contextSelectedCanvasRef}
+            onAddScene={addScene}
+            onAssignScene={assignScene}
+            onDeleteScene={removeScene}
+            onSelectScene={selectScene}
+            onScenePreviewRef={(sceneId, canvas) => {
+              if (canvas) scenePreviewCanvasesRef.current.set(sceneId, canvas);
+              else scenePreviewCanvasesRef.current.delete(sceneId);
+            }}
+          />
+        )}
         <MainWorkspace
           workspace={workspace}
           scenes={scenes}
@@ -521,7 +539,6 @@ export default function ControlApp() {
           isPlaying={isPlaying}
           audio={audio}
           outputDecorated={outputDecorated}
-          ledMappingStatus={ledMappingStatus}
           aiConfig={aiConfig}
           aiGenerating={aiGenerating}
           aiError={aiError}
@@ -541,7 +558,6 @@ export default function ControlApp() {
           onSave={handleSave}
           onLoad={handleLoad}
           onToggleOutputDecorations={toggleOutputDecorations}
-          onOpenLedMapping={openLedMapping}
           onToggleAudio={setAudioEnabled}
           onAudioDevice={setAudioDevice}
           onAiGenerate={handleAiGenerate}
@@ -668,7 +684,6 @@ function MainWorkspace(props: {
   isPlaying: boolean;
   audio: AudioAnalysis;
   outputDecorated: boolean;
-  ledMappingStatus: string;
   aiConfig: { baseUrl: string; apiKey: string; model: string };
   aiGenerating: boolean;
   aiError: string | null;
@@ -688,7 +703,6 @@ function MainWorkspace(props: {
   onSave: () => void;
   onLoad: () => void;
   onToggleOutputDecorations: () => void;
-  onOpenLedMapping: () => void;
   onToggleAudio: (enabled: boolean) => void;
   onAudioDevice: (deviceId: string, label?: string) => void;
   onAiGenerate: (type: SceneType, prompt: string) => void;
@@ -707,7 +721,7 @@ function MainWorkspace(props: {
   }
 
   return (
-    <main className="main-workspace">
+    <main className={`main-workspace ${props.workspace === "led" ? "is-led" : ""}`}>
       <PerformanceStage {...props} />
       <FeaturePanel {...props} />
     </main>
@@ -715,6 +729,7 @@ function MainWorkspace(props: {
 }
 
 function PerformanceStage(props: {
+  workspace: Workspace;
   selectedScene: Scene | null;
   busAScene: Scene | undefined;
   busBScene: Scene | undefined;
@@ -731,23 +746,28 @@ function PerformanceStage(props: {
   onCrossfade: (value: number) => void;
   onMixChange: (mix: Partial<MixSettings>) => void;
 }) {
+  const ledWorkspace = props.workspace === "led";
   return (
-    <section className="stage">
+    <section className={`stage ${ledWorkspace ? "is-led" : ""}`}>
       <PreviewFrame title="Program Output" meta={outputMeta(props.busAScene, props.busBScene, props.crossfade, props.mix)} tone="var(--cyan)" program>
         <div ref={props.outputPreviewRef} className="render-mount" />
       </PreviewFrame>
-      <div className="bus-row">
-        <PreviewFrame title="Bus A" meta={props.busAScene?.name ?? "empty"} tone="var(--cyan)">
-          <canvas ref={props.busACanvasRef} width={480} height={270} />
-        </PreviewFrame>
-        <PreviewFrame title="Bus B" meta={props.busBScene?.name ?? "empty"} tone="var(--rose)">
-          <canvas ref={props.busBCanvasRef} width={480} height={270} />
-        </PreviewFrame>
-        <PreviewFrame title="Selected" meta={props.selectedScene?.name ?? "none"} tone={props.selectedScene ? typeColors[props.selectedScene.type] : "var(--dim)"}>
-          <canvas ref={props.selectedCanvasRef} width={480} height={270} />
-        </PreviewFrame>
-      </div>
-      <TransportPanel crossfade={props.crossfade} mix={props.mix} onCutA={props.onCutA} onCutB={props.onCutB} onFadeA={props.onFadeA} onFadeB={props.onFadeB} onCrossfade={props.onCrossfade} onMixChange={props.onMixChange} />
+      {!ledWorkspace && (
+        <>
+          <div className="bus-row">
+            <PreviewFrame title="Bus A" meta={props.busAScene?.name ?? "empty"} tone="var(--cyan)">
+              <canvas ref={props.busACanvasRef} width={480} height={270} />
+            </PreviewFrame>
+            <PreviewFrame title="Bus B" meta={props.busBScene?.name ?? "empty"} tone="var(--rose)">
+              <canvas ref={props.busBCanvasRef} width={480} height={270} />
+            </PreviewFrame>
+            <PreviewFrame title="Selected" meta={props.selectedScene?.name ?? "none"} tone={props.selectedScene ? typeColors[props.selectedScene.type] : "var(--dim)"}>
+              <canvas ref={props.selectedCanvasRef} width={480} height={270} />
+            </PreviewFrame>
+          </div>
+          <TransportPanel crossfade={props.crossfade} mix={props.mix} onCutA={props.onCutA} onCutB={props.onCutB} onFadeA={props.onFadeA} onFadeB={props.onFadeB} onCrossfade={props.onCrossfade} onMixChange={props.onMixChange} />
+        </>
+      )}
     </section>
   );
 }
@@ -763,7 +783,7 @@ function FeaturePanel(props: Parameters<typeof MainWorkspace>[0]) {
     return <AudioPanel audio={props.audio} onToggle={props.onToggleAudio} onDevice={props.onAudioDevice} />;
   }
   if (props.workspace === "led") {
-    return <LedWorkspace onOpenLedMapping={props.onOpenLedMapping} ledMappingStatus={props.ledMappingStatus} />;
+    return <LedWorkspace />;
   }
   return <PerformanceSummary selectedScene={props.selectedScene} busAScene={props.busAScene} busBScene={props.busBScene} crossfade={props.crossfade} mix={props.mix} onMixChange={props.onMixChange} />;
 }
@@ -969,7 +989,7 @@ function ProjectPanel({ onSave, onLoad, scenes, selectedScene }: { onSave: () =>
   );
 }
 
-function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDecorated, onToggleOutputDecorations, onOpenLedMapping, ledMappingStatus }: Parameters<typeof MainWorkspace>[0]) {
+function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDecorated, onToggleOutputDecorations }: Parameters<typeof MainWorkspace>[0]) {
   return (
     <aside className="feature-panel">
       <SectionTitle>Output</SectionTitle>
@@ -981,8 +1001,6 @@ function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDe
         ["Title bar", outputDecorated ? "Visible" : "Hidden"],
       ]} />
       <button className="button" onClick={onToggleOutputDecorations}>{outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}</button>
-      <button className="button" onClick={onOpenLedMapping}>Open Calibration Window</button>
-      <p className="help">{ledMappingStatus}</p>
     </aside>
   );
 }
@@ -1128,15 +1146,437 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
   );
 }
 
-function LedWorkspace({ onOpenLedMapping, ledMappingStatus }: { onOpenLedMapping: () => void; ledMappingStatus: string }) {
+function LedWorkspace() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mappingPreviewRef = useRef<HTMLDivElement>(null);
+  const config = useLedStore((s) => s.config);
+  const connected = useLedStore((s) => s.connected);
+  const layoutInfo = useLedStore((s) => s.layoutInfo);
+  const calibrationPoints = useLedStore((s) => s.calibrationPoints);
+  const mappingHandles = useLedStore((s) => s.mappingHandles);
+  const rawCameraPoints = useLedStore((s) => s.rawCameraPoints);
+  const calibrating = useLedStore((s) => s.calibrating);
+  const calibrationProgress = useLedStore((s) => s.calibrationProgress);
+  const setConfig = useLedStore((s) => s.setConfig);
+  const setLayoutInfo = useLedStore((s) => s.setLayoutInfo);
+  const setConnected = useLedStore((s) => s.setConnected);
+  const setCalibrationPoints = useLedStore((s) => s.setCalibrationPoints);
+  const setMappingHandles = useLedStore((s) => s.setMappingHandles);
+  const setRawCameraPoints = useLedStore((s) => s.setRawCameraPoints);
+  const setCalibrating = useLedStore((s) => s.setCalibrating);
+  const setCalibrationProgress = useLedStore((s) => s.setCalibrationProgress);
+  const resetCalibration = useLedStore((s) => s.resetCalibration);
+  const [cameras, setCameras] = useState<CameraDevice[]>([]);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraStatus, setCameraStatus] = useState("Camera stopped");
+  const [error, setError] = useState<string | null>(null);
+
+  const stopCamera = useCallback(() => {
+    setCameraStream((stream) => {
+      stream?.getTracks().forEach((track) => track.stop());
+      return null;
+    });
+    setCameraStatus("Camera stopped");
+  }, []);
+
+  useEffect(() => stopCamera, [stopCamera]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !cameraStream) return;
+    attachCameraStream(video, cameraStream)
+      .then(setCameraStatus)
+      .catch((e) => setError(`Camera preview: ${String(e)}`));
+  }, [cameraStream]);
+
+  const refreshCameras = useCallback(async () => {
+    try {
+      setError(null);
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
+      if (!config.cameraDeviceId && devices[0]) {
+        setConfig({ cameraDeviceId: devices[0].deviceId });
+      }
+    } catch (e) {
+      setError(`Camera list: ${String(e)}`);
+    }
+  }, [config.cameraDeviceId, setConfig]);
+
+  const startCamera = useCallback(async () => {
+    try {
+      setError(null);
+      const stream = await startCalibrationCamera(config.cameraDeviceId);
+      stopCamera();
+      setCameraStream(stream);
+      const devices = await listCalibrationCameras();
+      setCameras(devices);
+    } catch (e) {
+      setError(`Camera: ${String(e)}`);
+    }
+  }, [config.cameraDeviceId, stopCamera]);
+
+  const ensureLedSender = useCallback(async () => {
+    if (config.layoutPath) {
+      const info = await ledLoadLayout(config.layoutPath);
+      setLayoutInfo(info);
+      setConnected(true);
+      return info;
+    }
+    const info = await ledInitSimple(config.broadcastIp, config.port, config.deviceId, config.pixelCount);
+    setLayoutInfo(info);
+    setConnected(true);
+    return info;
+  }, [config, setConnected, setLayoutInfo]);
+
+  const loadLayoutFile = useCallback(async () => {
+    try {
+      setError(null);
+      const path = await chooseLayoutPath();
+      if (!path) return;
+      setConfig({ layoutPath: path });
+      const info = await ledLoadLayout(path);
+      setLayoutInfo(info);
+      setConnected(true);
+    } catch (e) {
+      setConnected(false);
+      setError(`Layout: ${String(e)}`);
+    }
+  }, [setConfig, setConnected, setLayoutInfo]);
+
+  const clearLayoutFile = useCallback(() => {
+    setConfig({ layoutPath: null });
+    setLayoutInfo(null);
+    setConnected(false);
+  }, [setConfig, setConnected, setLayoutInfo]);
+
+  const updateMappingHandle = useCallback((index: number, clientX: number, clientY: number) => {
+    const preview = mappingPreviewRef.current;
+    if (!preview) return;
+    const rect = preview.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const x = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+    const next = [...mappingHandles];
+    next[index] = [x, y];
+    setMappingHandles(next);
+    if (rawCameraPoints.length > 0) {
+      setCalibrationPoints(mapCameraToVideo(next, rawCameraPoints));
+    }
+  }, [mappingHandles, rawCameraPoints, setCalibrationPoints, setMappingHandles]);
+
+  const fillAllLeds = useCallback(async (r: number, g: number, b: number) => {
+    try {
+      setError(null);
+      await ensureLedSender();
+      await ledFill(r, g, b);
+    } catch (e) {
+      setError(`LED fill: ${String(e)}`);
+    }
+  }, [ensureLedSender]);
+
+  const turnOffLeds = useCallback(async () => {
+    try {
+      setError(null);
+      await ensureLedSender();
+      await ledAllOff();
+    } catch (e) {
+      setError(`LED off: ${String(e)}`);
+    }
+  }, [ensureLedSender]);
+
+  const captureFrame = useCallback(() => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.videoWidth <= 0 || video.videoHeight <= 0) return null;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return rgbaFromCanvas(canvas);
+  }, []);
+
+  const averageFrames = useCallback((frames: NonNullable<ReturnType<typeof captureFrame>>[]) => {
+    const first = frames[0];
+    if (!first) return null;
+    const data = new Array(first.data.length).fill(0);
+    for (const frame of frames) {
+      if (frame.width !== first.width || frame.height !== first.height || frame.data.length !== first.data.length) {
+        return null;
+      }
+      for (let i = 0; i < data.length; i++) data[i] += frame.data[i];
+    }
+    for (let i = 0; i < data.length; i++) data[i] = Math.round(data[i] / frames.length);
+    return { data, width: first.width, height: first.height };
+  }, []);
+
+  const lumaDelta = useCallback((a: NonNullable<ReturnType<typeof captureFrame>>, b: NonNullable<ReturnType<typeof captureFrame>>) => {
+    if (a.width !== b.width || a.height !== b.height || a.data.length !== b.data.length) return Number.POSITIVE_INFINITY;
+    const pixelCount = a.width * a.height;
+    const stride = Math.max(1, Math.floor(pixelCount / 24000));
+    let sum = 0;
+    let count = 0;
+    for (let px = 0; px < pixelCount; px += stride) {
+      const idx = px * 4;
+      const la = 0.2126 * a.data[idx] + 0.7152 * a.data[idx + 1] + 0.0722 * a.data[idx + 2];
+      const lb = 0.2126 * b.data[idx] + 0.7152 * b.data[idx + 1] + 0.0722 * b.data[idx + 2];
+      sum += Math.abs(la - lb);
+      count++;
+    }
+    return count > 0 ? sum / count : Number.POSITIVE_INFINITY;
+  }, []);
+
+  const captureStableOffFrame = useCallback(async () => {
+    const stableFrames: NonNullable<ReturnType<typeof captureFrame>>[] = [];
+    let previous = captureFrame();
+    if (!previous) return null;
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const frame = captureFrame();
+      if (!frame) continue;
+      if (lumaDelta(previous, frame) < 1.8) {
+        stableFrames.push(frame);
+        if (stableFrames.length >= 3) break;
+      } else {
+        stableFrames.length = 0;
+      }
+      previous = frame;
+    }
+    if (stableFrames.length > 0) return averageFrames(stableFrames);
+    return previous;
+  }, [averageFrames, captureFrame, lumaDelta]);
+
+  const captureAveragedLitFrame = useCallback(async () => {
+    const frames: NonNullable<ReturnType<typeof captureFrame>>[] = [];
+    for (let i = 0; i < 4; i++) {
+      await new Promise((resolve) => setTimeout(resolve, i === 0 ? 90 : 45));
+      const frame = captureFrame();
+      if (frame) frames.push(frame);
+    }
+    return averageFrames(frames);
+  }, [averageFrames, captureFrame]);
+
+  const runCalibration = useCallback(async () => {
+    if (!cameraStream) {
+      setError("Start camera first");
+      return;
+    }
+    setCalibrating(true);
+    resetCalibration();
+    setError(null);
+
+    try {
+      const info = layoutInfo ?? await ensureLedSender();
+      await calibrationReset();
+      await ledAllOff();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const rawPoints = [];
+      setRawCameraPoints([]);
+      setCalibrationPoints([]);
+      for (let i = 0; i < info.total_pixels; i++) {
+        setCalibrationProgress((i + 1) / info.total_pixels);
+        let detected: [number, number] | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await ledAllOff();
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          const baseline = await captureStableOffFrame();
+          if (!baseline) continue;
+          await calibrationSetBaseline(baseline.data, baseline.width, baseline.height);
+          await ledSetPixel(i, 255, 255, 255);
+          const frame = await captureAveragedLitFrame();
+          if (!frame) continue;
+          detected = await calibrationDetectLed(frame.data, frame.width, frame.height);
+          if (detected) break;
+        }
+        if (detected) {
+          rawPoints.push({ lanternId: i, x: detected[0], y: detected[1] });
+          setRawCameraPoints([...rawPoints]);
+          setCalibrationPoints(mapCameraToVideo(mappingHandles, rawPoints));
+        }
+      }
+
+      await ledAllOff();
+    } catch (e) {
+      setError(`Calibration: ${String(e)}`);
+    } finally {
+      setCalibrating(false);
+    }
+  }, [cameraStream, layoutInfo, ensureLedSender, captureStableOffFrame, captureAveragedLitFrame, mappingHandles, resetCalibration, setCalibrating, setCalibrationPoints, setCalibrationProgress, setRawCameraPoints]);
+
+  const targetMode = layoutInfo && layoutInfo.device_count > 1
+    ? "Per ESP"
+    : config.broadcastIp === "255.255.255.255" || config.broadcastIp.endsWith(".255")
+      ? "Broadcast"
+      : "Direct";
+  const devices = layoutInfo?.devices ?? [{
+    key: "default",
+    device_id: config.deviceId,
+    controller_ip: config.broadcastIp,
+    total_pixels: config.pixelCount,
+  }];
   return (
     <aside className="feature-panel led-feature">
       <SectionTitle>LED</SectionTitle>
-      <button className="button" onClick={onOpenLedMapping}>Open Calibration Window</button>
-      <p className="help">{ledMappingStatus}</p>
-      <div className="led-panel-mount">
-        <LedPanel />
+      <div className="led-feature__header">
+        <button className={`button ${config.enabled ? "is-danger" : "is-primary"}`} onClick={async () => {
+          if (config.enabled) {
+            setConfig({ enabled: false });
+            return;
+          }
+          try {
+            setError(null);
+            await ensureLedSender();
+            setConfig({ enabled: true });
+          } catch (e) {
+            setError(`LED sender: ${String(e)}`);
+          }
+        }}>
+          {config.enabled ? "Stop Output" : "Start Output"}
+        </button>
       </div>
+      <InfoGrid rows={[
+        ["Output", config.enabled ? "Running" : "Stopped"],
+        ["Sender", connected ? "Ready" : "Not prepared"],
+        ["Target", `${targetMode} ${config.broadcastIp}:${config.port}`],
+        ["Pixels", String(layoutInfo?.total_pixels ?? config.pixelCount)],
+        ["Video samples", String(calibrationPoints.length)],
+      ]} />
+      <div className="led-feature__grid">
+        <div className="subpanel">
+          <div className="eyebrow">Layout</div>
+          <div className="led-layout-row">
+            <span className="led-path" title={config.layoutPath ?? "Simple UDP target"}>
+              {config.layoutPath ?? "Simple UDP target"}
+            </span>
+            <button className="button" onClick={loadLayoutFile}>Load JSON</button>
+          </div>
+          {config.layoutPath && (
+            <button className="button is-ghost" onClick={clearLayoutFile}>Use Simple Target</button>
+          )}
+          <div className="led-config-grid">
+            <div className="field">
+              <label>Target IP</label>
+              <input value={config.broadcastIp} onChange={(e) => setConfig({ broadcastIp: e.target.value })} />
+            </div>
+            <div className="field">
+              <label>Port</label>
+              <input type="number" min={1} max={65535} value={config.port} onChange={(e) => setConfig({ port: Math.max(1, Math.min(65535, parseInt(e.target.value, 10) || 1)) })} />
+            </div>
+            <div className="field">
+              <label>Device</label>
+              <input type="number" min={0} value={config.deviceId} onChange={(e) => setConfig({ deviceId: Math.max(0, parseInt(e.target.value, 10) || 0) })} />
+            </div>
+            <div className="field">
+              <label>Pixels</label>
+              <input type="number" min={1} value={config.pixelCount} onChange={(e) => setConfig({ pixelCount: Math.max(1, parseInt(e.target.value, 10) || 1) })} />
+            </div>
+          </div>
+        </div>
+
+        <div className="subpanel">
+          <div className="eyebrow">Topology</div>
+          {devices.map((device) => (
+            <div key={device.key} className="info-grid__row">
+              <span className="info-grid__label">{device.key} id:{device.device_id}</span>
+              <span className="info-grid__value">{device.controller_ip} / {device.total_pixels}px</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="subpanel led-calibration-panel">
+          <div className="eyebrow">Calibrate / Map</div>
+          <div className="led-calibration-panel__body">
+            <div className="led-camera-preview" ref={mappingPreviewRef}>
+              <video ref={videoRef} muted playsInline />
+              <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                <polygon className="led-map-preview__shape" points={mappingHandles.map(([x, y]) => `${x * 100},${y * 100}`).join(" ")} />
+                {rawCameraPoints.map((point) => (
+                  <circle className="led-map-preview__raw" key={`raw-${point.lanternId}`} cx={point.x * 100} cy={point.y * 100} r="0.9" />
+                ))}
+                {mappingHandles.map(([x, y], index) => (
+                  <circle
+                    className="led-map-preview__handle"
+                    key={`handle-${index}`}
+                    cx={x * 100}
+                    cy={y * 100}
+                    r="3.2"
+                    tabIndex={0}
+                    onPointerDown={(e) => {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      updateMappingHandle(index, e.clientX, e.clientY);
+                    }}
+                    onPointerMove={(e) => {
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        updateMappingHandle(index, e.clientX, e.clientY);
+                      }
+                    }}
+                    onPointerUp={(e) => {
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                    }}
+                    onPointerCancel={(e) => {
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                    }}
+                  />
+                ))}
+              </svg>
+            </div>
+            <div className="led-calibration-panel__controls">
+              <div className="led-corner-grid">
+                {mappingHandles.map(([x, y], index) => (
+                  <div key={index} className="led-corner-row">
+                    <span className="info-grid__label">{index + 1}</span>
+                    <input value={x.toFixed(2)} type="number" min={0} max={1} step={0.01} onChange={(e) => {
+                      const next = [...mappingHandles];
+                      next[index] = [Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)), y];
+                      setMappingHandles(next);
+                      if (rawCameraPoints.length > 0) setCalibrationPoints(mapCameraToVideo(next, rawCameraPoints));
+                    }} />
+                    <input value={y.toFixed(2)} type="number" min={0} max={1} step={0.01} onChange={(e) => {
+                      const next = [...mappingHandles];
+                      next[index] = [x, Math.max(0, Math.min(1, parseFloat(e.target.value) || 0))];
+                      setMappingHandles(next);
+                      if (rawCameraPoints.length > 0) setCalibrationPoints(mapCameraToVideo(next, rawCameraPoints));
+                    }} />
+                  </div>
+                ))}
+              </div>
+              <div className="led-camera-grid">
+                <button className={`button ${cameraStream ? "is-danger" : ""}`} onClick={cameraStream ? stopCamera : startCamera}>
+                  {cameraStream ? "Stop Camera" : "Start Camera"}
+                </button>
+                <button className="button" onClick={refreshCameras}>Scan</button>
+              </div>
+              <select value={config.cameraDeviceId ?? ""} onChange={(e) => setConfig({ cameraDeviceId: e.target.value || null })}>
+                <option value="">Default camera</option>
+                {cameras.map((camera) => <option key={camera.deviceId} value={camera.deviceId}>{camera.label}</option>)}
+              </select>
+              <button className="button is-primary" disabled={!cameraStream || calibrating} onClick={runCalibration}>
+                {calibrating ? `Calibrating ${(calibrationProgress * 100).toFixed(0)}%` : "Auto Calibrate"}
+              </button>
+              <div className="led-camera-grid">
+                <button className="button" onClick={() => fillAllLeds(255, 255, 255)}>All On</button>
+                <button className="button" onClick={turnOffLeds}>All Off</button>
+              </div>
+              <div className="info-grid__row">
+                <span className="info-grid__label">Camera</span>
+                <span className="info-grid__value">{cameraStatus}</span>
+              </div>
+              <div className="info-grid__row">
+                <span className="info-grid__label">Camera / video</span>
+                <span className="info-grid__value">{rawCameraPoints.length} / {calibrationPoints.length}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <canvas ref={canvasRef} style={{ position: "fixed", left: -10000, top: -10000, width: 1, height: 1, pointerEvents: "none", opacity: 0 }} />
+      {error && <div className="subpanel error-text">{error}</div>}
     </aside>
   );
 }

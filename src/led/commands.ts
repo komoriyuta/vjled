@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { LayoutInfo } from "../types";
 
+export interface UdpSendReport {
+  target: string;
+  local_addr: string;
+  bytes: number;
+  command: number;
+  device_id: number;
+  frame_no: number;
+}
+
 export async function ledLoadLayout(path: string): Promise<LayoutInfo> {
   return invoke("led_load_layout", { path });
 }
@@ -39,6 +48,14 @@ export async function ledAllOff(): Promise<void> {
 
 export async function ledPing(): Promise<void> {
   return invoke("led_ping");
+}
+
+export async function ledDebugFill(r: number, g: number, b: number): Promise<UdpSendReport[]> {
+  return invoke("led_debug_fill", { r, g, b });
+}
+
+export async function ledDebugPing(): Promise<UdpSendReport[]> {
+  return invoke("led_debug_ping");
 }
 
 export async function ledLayoutInfo(): Promise<LayoutInfo> {

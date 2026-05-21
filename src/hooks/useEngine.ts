@@ -64,6 +64,8 @@ export function useEngine(opts: UseEngineOptions) {
   const codeCacheRef = useRef<Map<string, string>>(new Map());
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
+  const ledSendInFlightRef = useRef(false);
+  const ledSendTimerRef = useRef<number | null>(null);
   const lastBpmRef = useRef(120);
   const syncVersionRef = useRef(0);
   const disposedRef = useRef(false);
@@ -305,13 +307,24 @@ export function useEngine(opts: UseEngineOptions) {
           copyCanvas(renderersRef.current.get(id)?.canvas ?? null, canvas);
         }
 
-        if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
-          const now2 = performance.now();
-          if (now2 - ledLastSendRef.current >= 33) {
-            ledLastSendRef.current = now2;
-            const compCanvas = compositorCanvasRef.current;
-            sendLedFrameFromCanvas(compCanvas, ledPointsRef.current, ledConfigRef.current);
-          }
+      }
+
+      if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
+        const now2 = performance.now();
+        if (!ledSendInFlightRef.current && ledSendTimerRef.current === null && now2 - ledLastSendRef.current >= 33) {
+          ledLastSendRef.current = now2;
+          const compCanvas = compositorCanvasRef.current;
+          const points = ledPointsRef.current;
+          const config = ledConfigRef.current;
+          ledSendTimerRef.current = window.setTimeout(() => {
+            ledSendTimerRef.current = null;
+            if (disposedRef.current || !config?.enabled || points.length === 0) return;
+            ledSendInFlightRef.current = true;
+            void sendLedFrameFromCanvas(compCanvas, points, config)
+              .finally(() => {
+                ledSendInFlightRef.current = false;
+              });
+          }, 0);
         }
       }
 
@@ -324,6 +337,11 @@ export function useEngine(opts: UseEngineOptions) {
       disposedRef.current = true;
       syncVersionRef.current++;
       cancelAnimationFrame(rafRef.current);
+      if (ledSendTimerRef.current !== null) {
+        window.clearTimeout(ledSendTimerRef.current);
+        ledSendTimerRef.current = null;
+      }
+      ledSendInFlightRef.current = false;
       unlistenState.then((fn) => fn());
       unlistenVideoCmd.then((fn) => fn());
       for (const [, e] of renderersRef.current) {

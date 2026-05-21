@@ -46,7 +46,7 @@ pub struct HardwareLayout {
 }
 
 fn default_broadcast_ip() -> String {
-    "192.168.11.255".to_string()
+    "255.255.255.255".to_string()
 }
 fn default_port() -> u16 {
     7777
@@ -96,7 +96,11 @@ impl HardwareLayout {
         let mut global_offset = 0usize;
         let mut lantern_map = HashMap::new();
 
-        let ip_start = self.udp.controller_ip_start.as_deref().unwrap_or("192.168.11.120");
+        let ip_start = self
+            .udp
+            .controller_ip_start
+            .as_deref()
+            .unwrap_or(&self.udp.broadcast_ip);
         let ip_stride = self.udp.controller_ip_stride.unwrap_or(1);
 
         for (di, dev) in self.devices.iter().enumerate() {
