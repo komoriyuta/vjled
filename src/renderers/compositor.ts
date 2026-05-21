@@ -193,6 +193,8 @@ export class Compositor {
   private quadBuffer: WebGLBuffer | null = null;
   private texA: WebGLTexture | null = null;
   private texB: WebGLTexture | null = null;
+  private texASize: [number, number] | null = null;
+  private texBSize: [number, number] | null = null;
   private u: Record<string, WebGLUniformLocation | null> = {};
 
   init(canvas: HTMLCanvasElement): void {
@@ -237,12 +239,19 @@ export class Compositor {
     }
   }
 
-  private uploadTex(tex: WebGLTexture, unit: number, source: HTMLCanvasElement): void {
+  private uploadTex(tex: WebGLTexture, unit: number, source: HTMLCanvasElement, slot: "A" | "B"): void {
     const gl = this.gl;
     if (!gl) return;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    const size = slot === "A" ? this.texASize : this.texBSize;
+    if (!size || size[0] !== source.width || size[1] !== source.height) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      if (slot === "A") this.texASize = [source.width, source.height];
+      else this.texBSize = [source.width, source.height];
+      return;
+    }
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
   }
 
   private setKeyUniforms(prefix: "A" | "B", key: SceneKeySettings | undefined): void {
@@ -265,7 +274,7 @@ export class Compositor {
     gl.useProgram(this.program);
 
     if (canvasA && this.texA) {
-      this.uploadTex(this.texA, 0, canvasA);
+      this.uploadTex(this.texA, 0, canvasA, "A");
       if (this.u.u_texA != null) gl.uniform1i(this.u.u_texA, 0);
       if (this.u.u_hasA != null) gl.uniform1f(this.u.u_hasA, 1.0);
     } else {
@@ -273,7 +282,7 @@ export class Compositor {
     }
 
     if (canvasB && this.texB) {
-      this.uploadTex(this.texB, 1, canvasB);
+      this.uploadTex(this.texB, 1, canvasB, "B");
       if (this.u.u_texB != null) gl.uniform1i(this.u.u_texB, 1);
       if (this.u.u_hasB != null) gl.uniform1f(this.u.u_hasB, 1.0);
     } else {
@@ -305,10 +314,15 @@ export class Compositor {
       if (this.texB) gl.deleteTexture(this.texB);
       if (this.quadBuffer) gl.deleteBuffer(this.quadBuffer);
       if (this.program) gl.deleteProgram(this.program);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     }
     this.texA = null;
     this.texB = null;
+    this.texASize = null;
+    this.texBSize = null;
     this.program = null;
     this.quadBuffer = null;
+    this.gl = null;
+    this.canvas = null;
   }
 }

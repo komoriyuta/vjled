@@ -18,6 +18,7 @@ const HOP_SIZE: usize = 256;
 const FFT_BANDS: usize = 32;
 const AUBIO_BUF_SIZE: usize = 2048;
 const AUBIO_HOP_SIZE: usize = 512;
+const ANALYSIS_EMIT_INTERVAL_SECONDS: f64 = 1.0 / 30.0;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioDeviceInfo {
@@ -170,6 +171,7 @@ struct AnalysisRuntime {
     last_genre: Option<GenrePrediction>,
     start_time: std::time::Instant,
     sample_rate: u32,
+    last_emit_time: f64,
 }
 
 impl AnalysisRuntime {
@@ -184,6 +186,7 @@ impl AnalysisRuntime {
             last_genre: None,
             start_time: std::time::Instant::now(),
             sample_rate,
+            last_emit_time: 0.0,
         })
     }
 
@@ -241,6 +244,13 @@ impl AnalysisRuntime {
 
                 let fft_bands = self.state.normalize_fft(&raw_fft_bands);
                 let beat_phase = self.state.beat_phase(now);
+                let should_emit = now - self.last_emit_time >= ANALYSIS_EMIT_INTERVAL_SECONDS;
+                if !should_emit {
+                    self.sample_buffer.drain(..HOP_SIZE);
+                    continue;
+                }
+                self.last_emit_time = now;
+
                 let payload = AudioAnalysisPayload {
                     fft: fft_bands,
                     bpm: (self.state.bpm * 10.0).round() / 10.0,
