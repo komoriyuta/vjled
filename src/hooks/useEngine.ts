@@ -41,6 +41,12 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
   return Array.from(latest.values());
 }
 
+function programSourceIds(busA: string | null, busB: string | null, selectedSceneId: string | null) {
+  const sourceA = busA ?? busB ?? selectedSceneId;
+  const sourceB = busA ? busB : null;
+  return { sourceA, sourceB };
+}
+
 export function useEngine(opts: UseEngineOptions) {
   const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints } = opts;
 
@@ -159,9 +165,10 @@ export function useEngine(opts: UseEngineOptions) {
       const syncVersion = ++syncVersionRef.current;
 
       const { scenes, busA, busB, selectedSceneId } = state;
+      const { sourceA, sourceB } = programSourceIds(busA, busB, selectedSceneId);
       const activeIds = new Set<string>();
-      if (busA) activeIds.add(busA);
-      if (busB) activeIds.add(busB);
+      if (sourceA) activeIds.add(sourceA);
+      if (sourceB) activeIds.add(sourceB);
       const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
       if (hasSelectedPreview && selectedSceneId) activeIds.add(selectedSceneId);
       for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
@@ -283,12 +290,13 @@ export function useEngine(opts: UseEngineOptions) {
         }
 
         const lookup = new Map(scenes.map((s) => [s.id, s]));
-        const cA = busA ? renderersRef.current.get(busA)?.canvas ?? null : null;
-        const cB = busB ? renderersRef.current.get(busB)?.canvas ?? null : null;
-        const sceneA = busA ? lookup.get(busA) : undefined;
-        const sceneB = busB ? lookup.get(busB) : undefined;
+        const { sourceA, sourceB } = programSourceIds(busA, busB, selectedSceneId);
+        const cA = sourceA ? renderersRef.current.get(sourceA)?.canvas ?? null : null;
+        const cB = sourceB ? renderersRef.current.get(sourceB)?.canvas ?? null : null;
+        const sceneA = sourceA ? lookup.get(sourceA) : undefined;
+        const sceneB = sourceB ? lookup.get(sourceB) : undefined;
         compositorRef.current?.render(cA, cB, {
-          crossfade,
+          crossfade: sourceB ? crossfade : 0,
           mix,
           keyA: sceneA?.key,
           keyB: sceneB?.key,

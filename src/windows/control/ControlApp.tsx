@@ -749,7 +749,7 @@ function PerformanceStage(props: {
   const ledWorkspace = props.workspace === "led";
   return (
     <section className={`stage ${ledWorkspace ? "is-led" : ""}`}>
-      <PreviewFrame title="Program Output" meta={outputMeta(props.busAScene, props.busBScene, props.crossfade, props.mix)} tone="var(--cyan)" program>
+      <PreviewFrame title="Program Output" meta={outputMeta(props.selectedScene, props.busAScene, props.busBScene, props.crossfade, props.mix)} tone="var(--cyan)" program>
         <div ref={props.outputPreviewRef} className="render-mount" />
       </PreviewFrame>
       {!ledWorkspace && (
@@ -1739,11 +1739,15 @@ function LabeledInput({ label, value, onChange, placeholder, type = "text" }: {
   );
 }
 
-function outputMeta(a: Scene | undefined, b: Scene | undefined, crossfade: number, mix: MixSettings): string {
-  if (!a && !b) return "no buses assigned";
-  if (crossfade <= 0.01) return a?.name ?? "Bus A empty";
-  if (crossfade >= 0.99) return b?.name ?? "Bus B empty";
-  return `${mixLabels[mix.mode]} ${a?.name ?? "empty"} -> ${b?.name ?? "empty"}`;
+function outputMeta(selected: Scene | null, a: Scene | undefined, b: Scene | undefined, crossfade: number, mix: MixSettings): string {
+  const sourceA = a ?? b ?? selected ?? undefined;
+  const sourceB = a ? b : undefined;
+  if (!sourceA && !sourceB) return "no source assigned";
+  if (!sourceA) return "no source assigned";
+  if (!sourceB) return sourceA.name;
+  if (crossfade <= 0.01) return sourceA.name;
+  if (crossfade >= 0.99) return sourceB.name;
+  return `${mixLabels[mix.mode]} ${sourceA.name} -> ${sourceB.name}`;
 }
 
 function bandAverage(values: number[], start: number, end: number): number {
