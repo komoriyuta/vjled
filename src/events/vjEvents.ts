@@ -1,5 +1,5 @@
 import { emit, listen } from "@tauri-apps/api/event";
-import type { AudioAnalysis, MixSettings, Scene } from "../types";
+import type { AudioAnalysis, CalibrationPoint, LedConfig, LayoutInfo, MappingHandle, MixSettings, Scene } from "../types";
 
 export interface VJStatePayload {
   scenes: Scene[];
@@ -18,6 +18,16 @@ export interface VideoCmdPayload {
   value: unknown;
 }
 
+export interface LedStatePayload {
+  source?: string;
+  config: LedConfig;
+  calibrationPoints: CalibrationPoint[];
+  layoutInfo: LayoutInfo | null;
+  mappingHandles?: MappingHandle[];
+  rawCameraPoints?: CalibrationPoint[];
+  connected: boolean;
+}
+
 export interface VJRuntimePayload {
   crossfade: number;
   mix: MixSettings;
@@ -32,6 +42,8 @@ const LOCAL_VJ_AUDIO = "vjled:vj-audio";
 const LOCAL_VJ_RUNTIME = "vjled:vj-runtime";
 const LOCAL_VIDEO_CMD = "vjled:video-cmd";
 const LOCAL_STATE_REQUEST = "vjled:vj-state-request";
+const LOCAL_LED_STATE = "vjled:led-state";
+const LOCAL_LED_STATE_REQUEST = "vjled:led-state-request";
 
 function emitLocal<T>(name: string, payload: T): void {
   window.dispatchEvent(new CustomEvent(name, { detail: payload }));
@@ -117,6 +129,34 @@ export function requestVJState(): void {
 export async function listenVJStateRequest(handler: () => void): Promise<Unlisten> {
   const localUnlisten = listenLocal<void>(LOCAL_STATE_REQUEST, handler);
   const tauriUnlisten = await listenTauri<void>("vj-state-request", handler);
+  return () => {
+    localUnlisten();
+    tauriUnlisten?.();
+  };
+}
+
+export function emitLedState(payload: LedStatePayload): void {
+  emitLocal(LOCAL_LED_STATE, payload);
+  emitTauri("led-state", payload);
+}
+
+export async function listenLedState(handler: Handler<LedStatePayload>): Promise<Unlisten> {
+  const localUnlisten = listenLocal<LedStatePayload>(LOCAL_LED_STATE, handler);
+  const tauriUnlisten = await listenTauri<LedStatePayload>("led-state", handler);
+  return () => {
+    localUnlisten();
+    tauriUnlisten?.();
+  };
+}
+
+export function requestLedState(): void {
+  emitLocal(LOCAL_LED_STATE_REQUEST, undefined);
+  emitTauri("led-state-request", undefined);
+}
+
+export async function listenLedStateRequest(handler: () => void): Promise<Unlisten> {
+  const localUnlisten = listenLocal<void>(LOCAL_LED_STATE_REQUEST, handler);
+  const tauriUnlisten = await listenTauri<void>("led-state-request", handler);
   return () => {
     localUnlisten();
     tauriUnlisten?.();

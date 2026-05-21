@@ -78,35 +78,72 @@ impl Calibrator {
             return None;
         }
 
-        let mut sum_x = 0.0f64;
-        let mut sum_y = 0.0f64;
-        let mut count = 0usize;
+        let mut diffs = vec![0.0f64; width * height];
+        let mut best_x = 0usize;
+        let mut best_y = 0usize;
+        let mut best_diff = 0.0f64;
 
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * width + x) * 4;
-                let dr = (lit_frame[idx] as i16 - baseline[idx] as i16).unsigned_abs() as u8;
-                let dg =
-                    (lit_frame[idx + 1] as i16 - baseline[idx + 1] as i16).unsigned_abs() as u8;
-                let db =
-                    (lit_frame[idx + 2] as i16 - baseline[idx + 2] as i16).unsigned_abs() as u8;
+                let px = y * width + x;
+                let lit_luma = 0.2126 * lit_frame[idx] as f64
+                    + 0.7152 * lit_frame[idx + 1] as f64
+                    + 0.0722 * lit_frame[idx + 2] as f64;
+                let base_luma = 0.2126 * baseline[idx] as f64
+                    + 0.7152 * baseline[idx + 1] as f64
+                    + 0.0722 * baseline[idx + 2] as f64;
 
-                let diff = dr.max(dg).max(db);
-                if diff > self.config.threshold {
-                    sum_x += x as f64;
-                    sum_y += y as f64;
-                    count += 1;
+                let diff = lit_luma - base_luma;
+                diffs[px] = diff.max(0.0);
+                if diff > best_diff {
+                    best_diff = diff;
+                    best_x = x;
+                    best_y = y;
                 }
             }
         }
 
-        if count == 0 {
+        if best_diff <= self.config.threshold as f64 {
             return None;
         }
 
+        let adaptive_threshold = (self.config.threshold as f64).max(best_diff * 0.55);
+        let radius = ((width.max(height) as f64) * 0.025).round().clamp(4.0, 28.0) as isize;
+        let x0 = best_x as isize;
+        let y0 = best_y as isize;
+        let mut weighted_x = 0.0f64;
+        let mut weighted_y = 0.0f64;
+        let mut weight_sum = 0.0f64;
+
+        for y in (y0 - radius).max(0)..=(y0 + radius).min(height as isize - 1) {
+            for x in (x0 - radius).max(0)..=(x0 + radius).min(width as isize - 1) {
+                let dx = x - x0;
+                let dy = y - y0;
+                if dx * dx + dy * dy > radius * radius {
+                    continue;
+                }
+                let diff = diffs[y as usize * width + x as usize];
+                if diff < adaptive_threshold {
+                    continue;
+                }
+                let weight = diff - adaptive_threshold;
+                weighted_x += (x as f64 + 0.5) * weight;
+                weighted_y += (y as f64 + 0.5) * weight;
+                weight_sum += weight;
+            }
+        }
+
+        if weight_sum > 0.0 {
+            return Some((
+                weighted_x / weight_sum / width as f64,
+                weighted_y / weight_sum / height as f64,
+            ));
+        }
+
         Some((
-            sum_x / count as f64 / width as f64,
-            sum_y / count as f64 / height as f64,
+            (best_x as f64 + 0.5) / width as f64,
+            (best_y as f64 + 0.5) / height as f64,
         ))
     }
 }

@@ -1,5 +1,5 @@
 use crate::led::layout::{HardwareLayout, ResolvedLayout};
-use crate::led::protocol::NeoPixelProtocol;
+use crate::led::protocol::{NeoPixelProtocol, UdpSendReport};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -115,6 +115,32 @@ impl MultiDeviceLEDController {
         Ok(())
     }
 
+    pub fn debug_fill_all(&self, r: u8, g: u8, b: u8) -> Result<Vec<UdpSendReport>, String> {
+        let mut proto = self
+            .protocol
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
+        let mut reports = Vec::new();
+
+        for device in &self.layout.devices {
+            reports.push(proto.send_fill_color_report_to(
+                device.device_id,
+                r,
+                g,
+                b,
+                &device.controller_ip,
+                port,
+            )?);
+            reports.push(proto.send_show_report_to(
+                device.device_id,
+                &device.controller_ip,
+                port,
+            )?);
+        }
+        Ok(reports)
+    }
+
     pub fn all_off(&self) -> Result<(), String> {
         self.fill_all(0, 0, 0)
     }
@@ -136,6 +162,24 @@ impl MultiDeviceLEDController {
             proto.send_ping_to(device.device_id, &device.controller_ip, port)?;
         }
         Ok(())
+    }
+
+    pub fn debug_ping(&self) -> Result<Vec<UdpSendReport>, String> {
+        let mut proto = self
+            .protocol
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
+        let mut reports = Vec::new();
+
+        for device in &self.layout.devices {
+            reports.push(proto.send_ping_report_to(
+                device.device_id,
+                &device.controller_ip,
+                port,
+            )?);
+        }
+        Ok(reports)
     }
 
     pub fn layout_info(&self) -> LayoutInfo {

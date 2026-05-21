@@ -126,3 +126,5 @@ export interface CalibrationPoint {
   x: number;
   y: number;
 }
+
+export type MappingHandle = [number, number];

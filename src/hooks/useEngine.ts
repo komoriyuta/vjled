@@ -69,6 +69,12 @@ function compactControlCommands(commands: { action: string; value: unknown }[]) 
   return Array.from(latest.values());
 }
 
+function programSourceIds(busA: string | null, busB: string | null, selectedSceneId: string | null) {
+  const sourceA = busA ?? busB ?? selectedSceneId;
+  const sourceB = busA ? busB : null;
+  return { sourceA, sourceB };
+}
+
 export function useEngine(opts: UseEngineOptions) {
   const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints } = opts;
 
@@ -92,6 +98,8 @@ export function useEngine(opts: UseEngineOptions) {
   const codeCacheRef = useRef<Map<string, string>>(new Map());
   const controlCacheRef = useRef<Map<string, { action: string; value: unknown }[]>>(new Map());
   const ledLastSendRef = useRef(0);
+  const ledSendInFlightRef = useRef(false);
+  const ledSendTimerRef = useRef<number | null>(null);
   const scenePreviewLastUpdateRef = useRef<Map<string, number>>(new Map());
   const rendererStateKeyRef = useRef("");
   const lastBpmRef = useRef(120);
@@ -194,11 +202,17 @@ export function useEngine(opts: UseEngineOptions) {
       const syncVersion = ++syncVersionRef.current;
 
       const { scenes } = state;
-      const activeScenes = scenes.filter((scene) => !scene.renderPaused);
+      const { scenes, busA, busB, selectedSceneId } = state;
+      const { sourceA, sourceB } = programSourceIds(busA, busB, selectedSceneId);
       const activeIds = new Set<string>();
-      for (const scene of activeScenes) {
-        activeIds.add(scene.id);
+      if (sourceA) activeIds.add(sourceA);
+      if (sourceB) activeIds.add(sourceB);
+      const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
+      if (hasSelectedPreview && selectedSceneId) activeIds.add(selectedSceneId);
+      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+        if (canvas) activeIds.add(id);
       }
+      const activeScenes = scenes.filter((scene) => !scene.renderPaused);
 
       for (const [id, entry] of renderersRef.current) {
         if (!activeIds.has(id)) {
@@ -343,12 +357,13 @@ export function useEngine(opts: UseEngineOptions) {
         }
 
         const lookup = new Map(scenes.map((s) => [s.id, s]));
-        const cA = activeBusA ? renderersRef.current.get(activeBusA)?.canvas ?? null : null;
-        const cB = activeBusB ? renderersRef.current.get(activeBusB)?.canvas ?? null : null;
-        const sceneA = activeBusA ? lookup.get(activeBusA) : undefined;
-        const sceneB = activeBusB ? lookup.get(activeBusB) : undefined;
+        const { sourceA, sourceB } = programSourceIds(busA, busB, selectedSceneId);
+        const cA = sourceA ? renderersRef.current.get(sourceA)?.canvas ?? null : null;
+        const cB = sourceB ? renderersRef.current.get(sourceB)?.canvas ?? null : null;
+        const sceneA = sourceA ? lookup.get(sourceA) : undefined;
+        const sceneB = sourceB ? lookup.get(sourceB) : undefined;
         compositorRef.current?.render(cA, cB, {
-          crossfade,
+          crossfade: sourceB ? crossfade : 0,
           mix,
           keyA: sceneA?.key,
           keyB: sceneB?.key,
@@ -382,13 +397,24 @@ export function useEngine(opts: UseEngineOptions) {
           copyCanvas(entry.canvas, canvas);
         }
 
-        if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
-          const now2 = performance.now();
-          if (now2 - ledLastSendRef.current >= 33) {
-            ledLastSendRef.current = now2;
-            const compCanvas = compositorCanvasRef.current;
-            sendLedFrameFromCanvas(compCanvas, ledPointsRef.current, ledConfigRef.current);
-          }
+      }
+
+      if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
+        const now2 = performance.now();
+        if (!ledSendInFlightRef.current && ledSendTimerRef.current === null && now2 - ledLastSendRef.current >= 33) {
+          ledLastSendRef.current = now2;
+          const compCanvas = compositorCanvasRef.current;
+          const points = ledPointsRef.current;
+          const config = ledConfigRef.current;
+          ledSendTimerRef.current = window.setTimeout(() => {
+            ledSendTimerRef.current = null;
+            if (disposedRef.current || !config?.enabled || points.length === 0) return;
+            ledSendInFlightRef.current = true;
+            void sendLedFrameFromCanvas(compCanvas, points, config)
+              .finally(() => {
+                ledSendInFlightRef.current = false;
+              });
+          }, 0);
         }
       }
 
@@ -401,6 +427,11 @@ export function useEngine(opts: UseEngineOptions) {
       disposedRef.current = true;
       syncVersionRef.current++;
       cancelAnimationFrame(rafRef.current);
+      if (ledSendTimerRef.current !== null) {
+        window.clearTimeout(ledSendTimerRef.current);
+        ledSendTimerRef.current = null;
+      }
+      ledSendInFlightRef.current = false;
       unlistenState.then((fn) => fn());
       unlistenVideoCmd.then((fn) => fn());
       unlistenAudio.then((fn) => fn());

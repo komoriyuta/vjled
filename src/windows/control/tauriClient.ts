@@ -27,6 +27,14 @@ export async function chooseVideoPath(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function chooseLayoutPath(): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    filters: [{ name: "Hardware Layout", extensions: ["json"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 export function saveProject(path: string, data: unknown): Promise<void> {
   return invoke("project_save", { path, data });
 }
@@ -59,29 +67,4 @@ export async function toggleOutputDecorations(): Promise<boolean | null> {
   const next = !current;
   await output.setDecorations(next);
   return next;
-}
-
-export async function openLedMappingWindow(): Promise<"focused" | "opening"> {
-  const existing = await WebviewWindow.getByLabel("led-mapping");
-  if (existing) {
-    await existing.show();
-    await existing.unminimize();
-    await existing.setFocus();
-    return "focused";
-  }
-
-  const win = new WebviewWindow("led-mapping", {
-    url: "/led-mapping.html",
-    title: "VJLED - LED Calibration",
-    width: 1280,
-    height: 720,
-    decorations: true,
-    resizable: true,
-    focus: true,
-  });
-
-  return new Promise((resolve, reject) => {
-    win.once("tauri://created", () => resolve("opening"));
-    win.once("tauri://error", (event) => reject(event.payload));
-  });
 }

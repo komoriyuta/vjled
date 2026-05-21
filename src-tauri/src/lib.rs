@@ -8,6 +8,7 @@ mod video_server;
 use audio::{AudioCapture, AudioDeviceInfo};
 use calibration::{CalibrationConfig, Calibrator};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
+use led::protocol::UdpSendReport;
 use led::layout::HardwareLayout;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -129,6 +130,20 @@ fn led_ping(state: State<AppState>) -> Result<(), String> {
     let guard = state.controller.lock().map_err(|e| e.to_string())?;
     let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
     ctrl.ping()
+}
+
+#[tauri::command]
+fn led_debug_fill(r: u8, g: u8, b: u8, state: State<AppState>) -> Result<Vec<UdpSendReport>, String> {
+    let guard = state.controller.lock().map_err(|e| e.to_string())?;
+    let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
+    ctrl.debug_fill_all(r, g, b)
+}
+
+#[tauri::command]
+fn led_debug_ping(state: State<AppState>) -> Result<Vec<UdpSendReport>, String> {
+    let guard = state.controller.lock().map_err(|e| e.to_string())?;
+    let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
+    ctrl.debug_ping()
 }
 
 #[tauri::command]
@@ -313,6 +328,8 @@ pub fn run() {
             led_set_pixel,
             led_all_off,
             led_ping,
+            led_debug_fill,
+            led_debug_ping,
             led_layout_info,
             calibration_set_baseline,
             calibration_detect_led,

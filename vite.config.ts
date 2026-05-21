@@ -13,7 +13,6 @@ export default defineConfig(async () => ({
       input: {
         main: resolve(__dirname, "index.html"),
         output: resolve(__dirname, "output.html"),
-        "led-mapping": resolve(__dirname, "led-mapping.html"),
       },
     },
   },
