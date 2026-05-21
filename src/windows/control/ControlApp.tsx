@@ -29,7 +29,6 @@ import {
   getNativeGpuDiagnostics,
   loadProjectFile,
   type NativeGpuDiagnostics,
-  openLedMappingWindow,
   resolveVideoUrl,
   saveProject,
   toggleOutputDecorations as toggleTauriOutputDecorations,
@@ -255,7 +254,6 @@ export default function ControlApp() {
 
   const [workspace, setWorkspace] = useState<Workspace>("perform");
   const [outputDecorated, setOutputDecorated] = useState(false);
-  const [ledMappingStatus, setLedMappingStatus] = useState("Calibration window not open");
   const [webglDiagnostics, setWebglDiagnostics] = useState<WebGLDiagnostics | null>(null);
   const [nativeGpuDiagnostics, setNativeGpuDiagnostics] = useState<NativeGpuDiagnostics | null>(null);
   const [autoVJ, setAutoVJ] = useState<AutoVJSettings>(defaultAutoVJ);
@@ -701,16 +699,6 @@ export default function ControlApp() {
       autoPrimedRef.current = false;
     }
   }, [autoVJ.enabled]);
-
-  const openLedMapping = useCallback(async () => {
-    try {
-      setLedMappingStatus("Opening calibration window...");
-      const status = await openLedMappingWindow();
-      setLedMappingStatus(status === "focused" ? "Calibration window focused" : "Calibration window open");
-    } catch (e) {
-      setLedMappingStatus(`Failed to open calibration window: ${String(e)}`);
-    }
-  }, []);
 
   useEffect(() => {
     const buildStatePayload = () => {
@@ -1558,7 +1546,7 @@ function MoodScoreBars({ moods }: { moods: AudioAnalysis["moodPredictions"] }) {
   );
 }
 
-function LedWorkspace({ onOpenLedMapping, ledMappingStatus }: { onOpenLedMapping: () => void; ledMappingStatus: string }) {
+function LedWorkspace() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mappingPreviewRef = useRef<HTMLDivElement>(null);

@@ -425,8 +425,16 @@ struct DiscogsMetadata {
 
 fn load_labels(model_path: &std::path::Path) -> Result<Vec<String>> {
     let metadata_path = model_path.with_extension("json");
-    let content = std::fs::read_to_string(metadata_path)?;
-    let metadata: DiscogsMetadata = serde_json::from_str(&content)?;
+    let raw = std::fs::read(&metadata_path)
+        .with_context(|| format!("Failed to read label file: {}", metadata_path.display()))?;
+    // Strip trailing non-UTF-8 / binary data that may follow the JSON text (e.g. embedded ONNX
+    // weights appended to the file).  Find the first NUL byte and truncate there; if none exists
+    // treat the whole buffer as text.
+    let text_bytes = raw.iter().position(|&b| b == 0).map_or(&raw[..], |n| &raw[..n]);
+    let content = std::str::from_utf8(text_bytes)
+        .with_context(|| format!("Label file is not valid UTF-8: {}", metadata_path.display()))?;
+    let metadata: DiscogsMetadata = serde_json::from_str(content)
+        .with_context(|| format!("Failed to parse label JSON: {}", metadata_path.display()))?;
     Ok(metadata.classes)
 }
 

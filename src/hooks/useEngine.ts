@@ -201,7 +201,6 @@ export function useEngine(opts: UseEngineOptions) {
 
       const syncVersion = ++syncVersionRef.current;
 
-      const { scenes } = state;
       const { scenes, busA, busB, selectedSceneId } = state;
       const { sourceA, sourceB } = programSourceIds(busA, busB, selectedSceneId);
       const activeIds = new Set<string>();
