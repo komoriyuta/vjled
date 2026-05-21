@@ -17,6 +17,7 @@ export class ThreeJSRenderer implements Renderer {
       canvas,
       alpha: true,
       preserveDrawingBuffer: true,
+      powerPreference: "high-performance",
     });
     this.renderer.setClearColor(0x000000, 1);
     this.scene = new THREE.Scene();
@@ -111,6 +112,7 @@ export class ThreeJSRenderer implements Renderer {
       });
     }
     this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
     this.renderer = null;
     this.scene = null;
     this.camera = null;

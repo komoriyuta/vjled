@@ -96,15 +96,16 @@ impl HardwareLayout {
         let mut global_offset = 0usize;
         let mut lantern_map = HashMap::new();
 
-        let ip_start = self.udp.controller_ip_start.as_deref().unwrap_or("192.168.11.120");
+        let ip_start = self
+            .udp
+            .controller_ip_start
+            .as_deref()
+            .unwrap_or("192.168.11.120");
         let ip_stride = self.udp.controller_ip_stride.unwrap_or(1);
 
         for (di, dev) in self.devices.iter().enumerate() {
             let controller_ip = dev.controller_ip.clone().unwrap_or_else(|| {
-                let parts: Vec<u8> = ip_start
-                    .split('.')
-                    .filter_map(|p| p.parse().ok())
-                    .collect();
+                let parts: Vec<u8> = ip_start.split('.').filter_map(|p| p.parse().ok()).collect();
                 if parts.len() == 4 {
                     let last = parts[3] as u32 + (di as u32) * ip_stride;
                     format!("{}.{}.{}.{}", parts[0], parts[1], parts[2], last)

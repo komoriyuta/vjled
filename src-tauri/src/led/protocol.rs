@@ -20,7 +20,10 @@ impl NeoPixelProtocol {
         socket
             .set_broadcast(true)
             .map_err(|e| format!("Failed to set broadcast: {}", e))?;
-        Ok(Self { socket, frame_no: 0 })
+        Ok(Self {
+            socket,
+            frame_no: 0,
+        })
     }
 
     fn next_frame_no(&mut self) -> u32 {
@@ -29,7 +32,13 @@ impl NeoPixelProtocol {
         n
     }
 
-    fn build_header(&self, device_id: u16, command: u8, flags: u8, frame_no: u32) -> [u8; HEADER_SIZE] {
+    fn build_header(
+        &self,
+        device_id: u16,
+        command: u8,
+        flags: u8,
+        frame_no: u32,
+    ) -> [u8; HEADER_SIZE] {
         let mut buf = [0u8; HEADER_SIZE];
         buf[0..2].copy_from_slice(&device_id.to_le_bytes());
         buf[2] = command;
@@ -46,7 +55,9 @@ impl NeoPixelProtocol {
     }
 
     fn resolve_addr(ip: &str, port: u16) -> Result<SocketAddrV4, String> {
-        let addr: Ipv4Addr = ip.parse().map_err(|e| format!("Invalid IP '{}': {}", ip, e))?;
+        let addr: Ipv4Addr = ip
+            .parse()
+            .map_err(|e| format!("Invalid IP '{}': {}", ip, e))?;
         Ok(SocketAddrV4::new(addr, port))
     }
 

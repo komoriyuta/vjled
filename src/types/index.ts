@@ -45,6 +45,7 @@ export interface Scene {
   name: string;
   type: SceneType;
   code: string;
+  renderPaused?: boolean;
   videoSync?: VideoSync;
   key?: SceneKeySettings;
 }
@@ -79,6 +80,20 @@ export interface AudioAnalysis {
   beat: boolean;
   beatPhase: number;
   beatCount: number;
+  genre: string | null;
+  genreConfidence: number;
+  musicTags: MusicTag[];
+  moodPredictions: MoodPrediction[];
+}
+
+export interface MusicTag {
+  label: string;
+  confidence: number;
+}
+
+export interface MoodPrediction {
+  label: string;
+  confidence: number;
 }
 
 export interface DeviceInfo {
