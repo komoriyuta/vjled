@@ -44,6 +44,7 @@ export const emptyAudioAnalysis: AudioAnalysis = {
   genre: null,
   genreConfidence: 0,
   musicTags: [],
+  moodPredictions: [],
 };
 
 export const defaultMixSettings: MixSettings = {

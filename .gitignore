@@ -28,3 +28,9 @@ src-python
 *.AppImage
 
 src-tauri/models/*.tmp
+src-tauri/models/discogs-effnet-bsdynamic-1.json
+src-tauri/models/discogs-effnet-bsdynamic-1.onnx
+src-tauri/models/mood_*-discogs-effnet-1.json
+src-tauri/models/mood_*-discogs-effnet-1.onnx
+src-tauri/models/danceability-discogs-effnet-1.json
+src-tauri/models/danceability-discogs-effnet-1.onnx

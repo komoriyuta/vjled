@@ -6,7 +6,7 @@ mod led;
 mod video_server;
 
 use audio::{AudioCapture, AudioDeviceInfo};
-use calibration::{Calibrator, CalibrationConfig};
+use calibration::{CalibrationConfig, Calibrator};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
 use led::layout::HardwareLayout;
 use std::collections::HashMap;
@@ -194,18 +194,15 @@ async fn ai_decide_auto_vj(
 
 #[tauri::command]
 fn project_save(path: String, data: serde_json::Value) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| format!("Serialize error: {}", e))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("Write error: {}", e))
+    let json =
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Serialize error: {}", e))?;
+    std::fs::write(&path, json).map_err(|e| format!("Write error: {}", e))
 }
 
 #[tauri::command]
 fn project_load(path: String) -> Result<serde_json::Value, String> {
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read error: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Parse error: {}", e))
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("Read error: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Parse error: {}", e))
 }
 
 #[tauri::command]
@@ -219,7 +216,11 @@ fn audio_list_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 }
 
 #[tauri::command]
-fn audio_start(device: Option<String>, state: State<AppState>, app: tauri::AppHandle) -> Result<(), String> {
+fn audio_start(
+    device: Option<String>,
+    state: State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let mut audio = state.audio.lock().map_err(|e| e.to_string())?;
     audio.start(device, app)
 }

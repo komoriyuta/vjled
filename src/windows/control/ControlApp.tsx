@@ -1227,6 +1227,7 @@ function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDe
 
 function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onToggle: (enabled: boolean) => void; onDevice: (deviceId: string, label?: string) => void }) {
   const [devices, setDevices] = useState<RustAudioDevice[]>([]);
+  const moodPredictions = audio.moodPredictions ?? [];
 
   useEffect(() => {
     listAudioDevices().then(setDevices).catch(() => {});
@@ -1261,7 +1262,9 @@ function AudioPanel({ audio, onToggle, onDevice }: { audio: AudioAnalysis; onTog
         ["BPM", audio.bpm ? audio.bpm.toFixed(1) : "-"],
         ["Beat", audio.beat ? "Yes" : "No"],
         ["Tags", audio.musicTags.length ? audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "No ONNX result"],
+        ["Mood Scores", moodPredictions.length ? moodPredictions.map((mood) => `${mood.label} ${(mood.confidence * 100).toFixed(0)}%`).join(", ") : "No mood result"],
       ]} />
+      <MoodScoreBars moods={moodPredictions} />
       <div className="vu">
         {audio.fft.slice(0, 16).map((v, i) => (
           <div key={i} className="vu__bar" style={{ height: `${Math.max(3, v * 48)}px`, background: i < 5 ? "var(--green)" : i < 12 ? "var(--cyan)" : "var(--rose)" }} />
@@ -1355,6 +1358,7 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
             </div>
           ))}
         </div>
+        <MoodScoreBars moods={audio.moodPredictions} />
         <div className="auto-vj__log" aria-label="Auto VJ activity log">
           {autoLog.length ? autoLog.map((entry) => (
             <div key={entry.id} className={`auto-vj__log-line is-${entry.kind.toLowerCase()}`}>
@@ -1380,6 +1384,24 @@ function AiPanel({ generating, error, onGenerate, onEdit, config, onConfigChange
         </div>
       )}
       {error && <div className="subpanel error-text">{error}</div>}
+    </div>
+  );
+}
+
+function MoodScoreBars({ moods }: { moods: AudioAnalysis["moodPredictions"] }) {
+  if (!moods.length) {
+    return null;
+  }
+
+  return (
+    <div className="mood-scores" aria-label="Mood classifier scores">
+      {moods.map((mood) => (
+        <div key={mood.label} className="mood-score">
+          <span>{mood.label}</span>
+          <div><span style={{ width: `${Math.max(2, mood.confidence * 100)}%` }} /></div>
+          <strong>{(mood.confidence * 100).toFixed(0)}%</strong>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1734,9 +1756,20 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   }
 
   const tags = audio.musicTags.map((tag) => tag.label.toLowerCase());
-  const tagSummary = audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ");
+  const moodPredictions = audio.moodPredictions ?? [];
+  const moodScores = new Map(moodPredictions.map((mood) => [mood.label.toLowerCase(), mood.confidence]));
+  const tagSummary = [
+    ...audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`),
+    ...moodPredictions.map((mood) => `${mood.label} ${(mood.confidence * 100).toFixed(0)}%`),
+  ].join(", ");
   const has = (...needles: string[]) => tags.some((tag) => needles.some((needle) => tag.includes(needle)));
+  const mood = (label: string) => moodScores.get(label.toLowerCase()) ?? 0;
   const vocal = has("vocal");
+  const party = Math.max(mood("party"), mood("danceable"));
+  const relaxed = mood("relaxed");
+  const aggressive = mood("aggressive");
+  const sad = mood("sad");
+  const happy = mood("happy");
 
   const base = {
     energy,
@@ -1745,30 +1778,30 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
     treble,
   };
 
-  if (has("ambient", "chillout", "chill", "mellow") || energy < 0.34) {
+  if (has("ambient", "chillout", "chill", "mellow") || relaxed > 0.62 || energy < 0.34) {
     return {
       ...base,
-      label: has("ambient") ? "Ambient Texture" : "Chill Atmosphere",
+      label: has("ambient") ? "Ambient Texture" : relaxed > 0.62 ? "Relaxed Atmosphere" : "Chill Atmosphere",
       tags: tagSummary,
       palette: "indigo, teal, silver, soft violet, and muted green",
       motion: lowTempo ? "slow floating parallax and long phase shifts" : "gentle drifting pulses with restrained beat response",
       texture: "mist, flowing contours, soft particles, liquid gradients, and wide spatial depth",
     };
   }
-  if (has("electronic", "electronica", "electro", "house", "dance") || fastTempo) {
+  if (has("electronic", "electronica", "electro", "house", "dance") || party > 0.62 || fastTempo) {
     return {
       ...base,
-      label: has("house") ? "House Pulse" : has("electro") ? "Electro Drive" : "Electronic Motion",
+      label: has("house") ? "House Pulse" : party > 0.62 ? "Dance Pulse" : has("electro") ? "Electro Drive" : "Electronic Motion",
       tags: tagSummary,
       palette: energy > 0.62 ? "laser cyan, acid green, hot pink, black, and white hits" : "cyan, violet, lime, and dark graphite",
       motion: fastTempo || energy > 0.6 ? "beat-locked sweeps, tight strobes, sidechain-like expansion, and crisp cuts" : "clean sequenced pulses and gliding looped motion",
       texture: "vector grids, scanlines, waveform ribbons, sequencer blocks, and luminous trails",
     };
   }
-  if (has("metal", "hard rock", "punk", "heavy metal") || (bass > 0.42 && treble < 0.36)) {
+  if (has("metal", "hard rock", "punk", "heavy metal") || aggressive > 0.62 || (bass > 0.42 && treble < 0.36)) {
     return {
       ...base,
-      label: has("punk") ? "Punk Impact" : has("metal") || has("heavy metal") ? "Metal Weight" : "Rock Weight",
+      label: has("punk") ? "Punk Impact" : has("metal") || has("heavy metal") ? "Metal Weight" : aggressive > 0.62 ? "Aggressive Impact" : "Rock Weight",
       tags: tagSummary,
       palette: "deep red, hard white, sodium amber, black, and steel blue",
       motion: "aggressive beat impacts, pressure waves, sharp camera jolts, and forward thrust",
@@ -1805,14 +1838,24 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
       texture: "grain, contour lines, warm halos, brushed shapes, and analog light leaks",
     };
   }
-  if (vocal || has("pop", "catchy", "happy", "party", "sexy")) {
+  if (vocal || happy > 0.62 || has("pop", "catchy", "happy", "party", "sexy")) {
     return {
       ...base,
-      label: has("party") || has("dance") ? "Pop Party" : vocal ? "Vocal Pop" : "Pop Shine",
+      label: has("party") || has("dance") || party > 0.62 ? "Pop Party" : vocal ? "Vocal Pop" : happy > 0.62 ? "Happy Shine" : "Pop Shine",
       tags: tagSummary,
       palette: "aqua, saturated pink, warm yellow, white, and violet accents",
       motion: "hook-driven pulses, rising arcs, clean flashes, and bright chorus lifts",
       texture: "ribbons, spark fields, glossy panels, lyric-like contours, and light blooms",
+    };
+  }
+  if (sad > 0.62) {
+    return {
+      ...base,
+      label: "Melancholic Drift",
+      tags: tagSummary,
+      palette: "deep blue, silver, muted violet, soft amber, and black",
+      motion: "slow downward arcs, delayed pulses, and restrained breathing transitions",
+      texture: "rain-like streaks, low clouds, sparse particles, glassy bands, and fading halos",
     };
   }
   return {

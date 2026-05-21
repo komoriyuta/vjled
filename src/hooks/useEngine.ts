@@ -38,6 +38,10 @@ function clearCanvas(canvas: HTMLCanvasElement | null | undefined) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+function logRendererError(scene: Scene, error: unknown) {
+  console.error(`Failed to create renderer for ${scene.name} (${scene.type})`, error);
+}
+
 function compactControlCommands(commands: { action: string; value: unknown }[]) {
   const latest = new Map<string, { action: string; value: unknown }>();
   for (const cmd of commands) {
@@ -187,7 +191,10 @@ export function useEngine(opts: UseEngineOptions) {
         for (const id of activeIds) {
           const scene = lookup.get(id);
           if (!scene) continue;
-          const entry = await getOrCreate(scene);
+          const entry = await getOrCreate(scene).catch((error) => {
+            logRendererError(scene, error);
+            return null;
+          });
           if (syncVersion !== syncVersionRef.current) {
             if (entry && !activeIds.has(id)) {
               entry.renderer.destroy();
@@ -237,6 +244,19 @@ export function useEngine(opts: UseEngineOptions) {
       const activeBusA = busA && !sceneById.get(busA)?.renderPaused ? busA : null;
       const activeBusB = busB && !sceneById.get(busB)?.renderPaused ? busB : null;
       const activeSelectedSceneId = selectedSceneId && !sceneById.get(selectedSceneId)?.renderPaused ? selectedSceneId : null;
+      const activeRenderIds = new Set<string>();
+      if (activeBusA) activeRenderIds.add(activeBusA);
+      if (activeBusB) activeRenderIds.add(activeBusB);
+      if (activeSelectedSceneId) activeRenderIds.add(activeSelectedSceneId);
+      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
+        if (canvas && !sceneById.get(id)?.renderPaused) activeRenderIds.add(id);
+      }
+      for (const id of activeRenderIds) {
+        const scene = sceneById.get(id);
+        if (!scene || renderersRef.current.has(id) || loadingRenderersRef.current.has(id)) continue;
+        void getOrCreate(scene).catch((error) => logRendererError(scene, error));
+      }
+
       const now = performance.now();
       const time = (now - t0Ref.current) / 1000;
       const dt = time - prevRef.current;

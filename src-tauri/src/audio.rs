@@ -1,4 +1,4 @@
-use crate::genre::{GenreClassifier, GenrePrediction, MusicTag};
+use crate::genre::{GenreClassifier, GenrePrediction, MoodPrediction, MusicTag};
 use aubio::{OnsetMode, Tempo};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -39,6 +39,7 @@ struct AudioAnalysisPayload {
     genre: Option<String>,
     genre_confidence: f32,
     music_tags: Vec<MusicTag>,
+    mood_predictions: Vec<MoodPrediction>,
 }
 
 fn band_average(magnitude: &[f64], bin_count: usize, start: usize, end: usize) -> f64 {
@@ -188,7 +189,8 @@ impl AnalysisRuntime {
 
     fn push_mono(&mut self, mono: &[f32], app: &AppHandle) {
         self.sample_buffer.extend_from_slice(mono);
-        self.state.feed_aubio(mono, self.start_time.elapsed().as_secs_f64());
+        self.state
+            .feed_aubio(mono, self.start_time.elapsed().as_secs_f64());
         if let Some(prediction) = self.genre.push_mono(mono) {
             self.last_genre = Some(prediction);
         }
@@ -203,8 +205,7 @@ impl AnalysisRuntime {
                 for (i, s) in chunk.iter().enumerate() {
                     let w = 0.5
                         * (1.0
-                            - (2.0 * std::f64::consts::PI * i as f64
-                                / (FFT_SIZE - 1) as f64)
+                            - (2.0 * std::f64::consts::PI * i as f64 / (FFT_SIZE - 1) as f64)
                                 .cos());
                     self.fft_buffer[i] = Complex::new(*s as f64 * w, 0.0);
                 }
@@ -259,6 +260,11 @@ impl AnalysisRuntime {
                         .last_genre
                         .as_ref()
                         .map(|prediction| prediction.tags.clone())
+                        .unwrap_or_default(),
+                    mood_predictions: self
+                        .last_genre
+                        .as_ref()
+                        .map(|prediction| prediction.moods.clone())
                         .unwrap_or_default(),
                 };
 
@@ -475,7 +481,8 @@ fn select_target(host: &cpal::Host, requested: Option<&str>) -> Result<CaptureTa
         None => {
             #[cfg(target_os = "macos")]
             {
-                Ok(host.default_input_device()
+                Ok(host
+                    .default_input_device()
                     .map(CaptureTarget::Input)
                     .or_else(|| find_default_loopback(host))
                     .ok_or::<String>("No audio input device available".into())?)

@@ -72,12 +72,7 @@ impl Calibrator {
         self.baseline.is_some()
     }
 
-    pub fn detect_led(
-        &self,
-        lit_frame: &[u8],
-        width: usize,
-        height: usize,
-    ) -> Option<(f64, f64)> {
+    pub fn detect_led(&self, lit_frame: &[u8], width: usize, height: usize) -> Option<(f64, f64)> {
         let baseline = self.baseline.as_ref()?;
         if baseline.len() != lit_frame.len() || width != self.width || height != self.height {
             return None;
@@ -91,8 +86,10 @@ impl Calibrator {
             for x in 0..width {
                 let idx = (y * width + x) * 4;
                 let dr = (lit_frame[idx] as i16 - baseline[idx] as i16).unsigned_abs() as u8;
-                let dg = (lit_frame[idx + 1] as i16 - baseline[idx + 1] as i16).unsigned_abs() as u8;
-                let db = (lit_frame[idx + 2] as i16 - baseline[idx + 2] as i16).unsigned_abs() as u8;
+                let dg =
+                    (lit_frame[idx + 1] as i16 - baseline[idx + 1] as i16).unsigned_abs() as u8;
+                let db =
+                    (lit_frame[idx + 2] as i16 - baseline[idx + 2] as i16).unsigned_abs() as u8;
 
                 let diff = dr.max(dg).max(db);
                 if diff > self.config.threshold {

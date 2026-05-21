@@ -499,6 +499,40 @@ button { color: inherit; }
   height: 100%;
   background: linear-gradient(90deg, var(--cyan), var(--rose));
 }
+.mood-scores {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #080a0c;
+}
+.mood-score {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.mood-score > div {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: #050607;
+}
+.mood-score > div > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--cyan), var(--rose));
+}
+.mood-score > strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
 .auto-vj__log {
   display: grid;
   gap: 0;

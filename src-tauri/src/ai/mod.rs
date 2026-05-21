@@ -142,12 +142,10 @@ pub async fn generate_code(
 
     let system = system_prompt_for_type(scene_type);
 
-    let mut messages = vec![
-        ChatMessage {
-            role: "system".to_string(),
-            content: system,
-        },
-    ];
+    let mut messages = vec![ChatMessage {
+        role: "system".to_string(),
+        content: system,
+    }];
 
     if let Some(code) = existing_code {
         if !code.is_empty() {
@@ -197,13 +195,12 @@ pub async fn generate_code(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let choice = chat_resp
-        .choices
-        .first()
-        .ok_or("No response from API")?;
+    let choice = chat_resp.choices.first().ok_or("No response from API")?;
 
     if choice.finish_reason.as_deref() == Some("length") {
-        return Err("AI response was truncated before a complete JSON/code result was returned".to_string());
+        return Err(
+            "AI response was truncated before a complete JSON/code result was returned".to_string(),
+        );
     }
 
     parse_generated_code_json(scene_type, &choice.message.content)
@@ -287,10 +284,9 @@ Rules:
 }
 
 fn parse_generated_code_json(scene_type: &str, content: &str) -> Result<String, String> {
-    let json = extract_json_object(content)
-        .ok_or("AI response did not contain a JSON object")?;
-    let generated: GeneratedCodeResponse = serde_json::from_str(json)
-        .map_err(|e| format!("AI response JSON parse failed: {}", e))?;
+    let json = extract_json_object(content).ok_or("AI response did not contain a JSON object")?;
+    let generated: GeneratedCodeResponse =
+        serde_json::from_str(json).map_err(|e| format!("AI response JSON parse failed: {}", e))?;
     if !generated.complete {
         return Err("AI reported that the generated code is incomplete".to_string());
     }
@@ -339,12 +335,19 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
                 || code.contains("<script")
                 || code.contains("<canvas")
             {
-                return Err("AI returned p5 code outside the supported sandbox contract".to_string());
+                return Err(
+                    "AI returned p5 code outside the supported sandbox contract".to_string()
+                );
             }
         }
         "threejs" => {
-            if !code.contains("function setup(scene, camera, renderer)") || !code.contains("function update(state, time, dt, audio)") {
-                return Err("AI returned Three.js code without the required setup/update signatures".to_string());
+            if !code.contains("function setup(scene, camera, renderer)")
+                || !code.contains("function update(state, time, dt, audio)")
+            {
+                return Err(
+                    "AI returned Three.js code without the required setup/update signatures"
+                        .to_string(),
+                );
             }
             if code.contains("import ")
                 || code.contains("export ")
@@ -355,7 +358,9 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
                 || code.contains("GLTFLoader")
                 || code.contains("new THREE.WebGLRenderer")
             {
-                return Err("AI returned Three.js code outside the supported renderer contract".to_string());
+                return Err(
+                    "AI returned Three.js code outside the supported renderer contract".to_string(),
+                );
             }
         }
         _ => {}
@@ -379,7 +384,8 @@ fn extract_json_object(content: &str) -> Option<&str> {
 fn clean_code_fences(code: &str) -> String {
     let trimmed = code.trim();
     if trimmed.starts_with("```") {
-        let without_start = trimmed.trim_start_matches("```")
+        let without_start = trimmed
+            .trim_start_matches("```")
             .trim_start_matches(|c: char| c.is_alphanumeric() || c == '\n' || c == '\r');
         let without_end = without_start.trim_end_matches("```").trim();
         without_end.to_string()

@@ -83,9 +83,15 @@ export interface AudioAnalysis {
   genre: string | null;
   genreConfidence: number;
   musicTags: MusicTag[];
+  moodPredictions: MoodPrediction[];
 }
 
 export interface MusicTag {
+  label: string;
+  confidence: number;
+}
+
+export interface MoodPrediction {
   label: string;
   confidence: number;
 }

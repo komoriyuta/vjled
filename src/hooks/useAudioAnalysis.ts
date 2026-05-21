@@ -12,9 +12,15 @@ interface RustAudioAnalysis {
   genre: string | null;
   genre_confidence: number;
   music_tags: MusicTag[];
+  mood_predictions: MoodPrediction[];
 }
 
 export interface MusicTag {
+  label: string;
+  confidence: number;
+}
+
+export interface MoodPrediction {
   label: string;
   confidence: number;
 }
@@ -54,6 +60,7 @@ export function useAudioAnalysis(): void {
           genre: d.genre,
           genreConfidence: d.genre_confidence,
           musicTags: d.music_tags ?? [],
+          moodPredictions: d.mood_predictions ?? [],
         });
       });
       const unlistenError = await listen<string>("audio-error", (ev) => {
