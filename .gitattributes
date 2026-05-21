@@ -1,0 +1,1 @@
+src-tauri/models/*.onnx filter=lfs diff=lfs merge=lfs -text

@@ -97,7 +97,7 @@ Rules:
 - Define `function setup(scene, camera, renderer)` that creates objects and returns a state object.
 - Define `function update(state, time, dt, audio)` that animates the scene each frame.
 - Available globals: `THREE` (the Three.js namespace).
-- Audio includes: `audio.bpm`, `audio.beat`, `audio.beatPhase`, `audio.beatCount`, `audio.fft`.
+- Audio includes: `audio.bpm`, `audio.beat`, `audio.beatPhase`, `audio.beatCount`, `audio.fft`, `audio.genre`.
 - In setup: configure camera position, add objects to scene, return state with references.
 - In update: use `time` (seconds) and `dt` (delta seconds) for animation.
 - Do NOT import anything. Do NOT create renderer or DOM elements.

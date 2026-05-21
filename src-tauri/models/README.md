@@ -1,8 +1,8 @@
-Downloaded lightweight CPU music tagger:
+Downloaded CPU music style classifier:
 
-- msd-musicnn-1.onnx: Essentia MusiCNN tag model, input [1, 187, 96], output 50 tag probabilities.
-- msd-musicnn-1.json: metadata and tag labels.
+- discogs-effnet-bsdynamic-1.onnx: Essentia Discogs EffNet style model, input [n, 128, 96], output 400 style probabilities.
+- discogs-effnet-bsdynamic-1.json: metadata and Discogs style labels.
 
-Run `npm run fetch-models` to download the ONNX file. The ONNX weights are ignored by Git.
+The ONNX weights are tracked with Git LFS.
 
 The model is from https://essentia.upf.edu/models/ and is licensed by MTG under a non-commercial Creative Commons license; check the upstream license before redistribution or commercial use.

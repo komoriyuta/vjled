@@ -9,64 +9,12 @@ use tract_onnx::prelude::*;
 
 const MODEL_SAMPLE_RATE: u32 = 16_000;
 const MEL_BANDS: usize = 96;
-const MEL_FRAMES: usize = 187;
+const MEL_FRAMES: usize = 128;
 const FFT_SIZE: usize = 512;
 const HOP_SIZE: usize = 256;
 const BUFFER_SAMPLES: usize = FFT_SIZE + HOP_SIZE * (MEL_FRAMES - 1);
 const CLASSIFY_INTERVAL_SECONDS: usize = 8;
 
-const DEFAULT_TAGS: [&str; 50] = [
-    "rock",
-    "pop",
-    "alternative",
-    "indie",
-    "electronic",
-    "female vocalists",
-    "dance",
-    "00s",
-    "alternative rock",
-    "jazz",
-    "beautiful",
-    "metal",
-    "chillout",
-    "male vocalists",
-    "classic rock",
-    "soul",
-    "indie rock",
-    "mellow",
-    "electronica",
-    "80s",
-    "folk",
-    "90s",
-    "chill",
-    "instrumental",
-    "punk",
-    "oldies",
-    "blues",
-    "hard rock",
-    "ambient",
-    "acoustic",
-    "experimental",
-    "female vocalist",
-    "guitar",
-    "hip-hop",
-    "70s",
-    "party",
-    "country",
-    "easy listening",
-    "sexy",
-    "catchy",
-    "funk",
-    "electro",
-    "heavy metal",
-    "progressive rock",
-    "60s",
-    "rnb",
-    "indie pop",
-    "sad",
-    "house",
-    "happy",
-];
 const TAG_LIMIT: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,10 +125,10 @@ struct GenreModelRuntime {
 
 impl GenreModelRuntime {
     fn load() -> TractResult<Self> {
-        let embedding_path = model_path("msd-musicnn-1.onnx")
+        let embedding_path = model_path("discogs-effnet-bsdynamic-1.onnx")
             .filter(|path| path.exists())
-            .ok_or_else(|| anyhow!("MusiCNN embedding model is not bundled"))?;
-        let labels = load_labels(&embedding_path).unwrap_or_else(default_labels);
+            .ok_or_else(|| anyhow!("Discogs EffNet model is not bundled"))?;
+        let labels = load_labels(&embedding_path)?;
         let embedding_model = load_embedding_model(&embedding_path)?;
         let mut planner = FftPlanner::new();
 
@@ -197,42 +145,26 @@ impl GenreModelRuntime {
         let features = self.log_mel(samples);
         let input = tract_ndarray::Array3::from_shape_vec((1, MEL_FRAMES, MEL_BANDS), features)?
             .into_tensor();
-        let embedding_result = self
-            .embedding_model
-            .run(tvec!(input.into()))?;
-        let scores = embedding_result
+        let embedding_result = self.embedding_model.run(tvec!(input.into()))?;
+        let scores = embedding_result[0]
+            .to_array_view::<f32>()?
             .iter()
-            .find_map(|tensor| {
-                let values: Vec<f32> = tensor.to_array_view::<f32>().ok()?.iter().copied().collect();
-                (values.len() == self.labels.len()).then_some(values)
-            })
-            .ok_or_else(|| anyhow!("MusiCNN tag output was not found"))?;
+            .copied()
+            .collect::<Vec<_>>();
         let mut tags = scores
             .into_iter()
-            .enumerate()
-            .map(|(idx, confidence)| MusicTag {
-                label: self
-                    .labels
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_else(|| format!("tag-{}", idx)),
+            .zip(self.labels.iter())
+            .map(|(confidence, label)| MusicTag {
+                label: label.clone(),
                 confidence,
             })
             .collect::<Vec<_>>();
-        tags.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        tags.sort_by(|a, b| b.confidence.total_cmp(&a.confidence));
         tags.truncate(TAG_LIMIT);
-
-        let primary = tags.first().cloned().unwrap_or_else(|| MusicTag {
-            label: "unknown".into(),
-            confidence: 0.0,
-        });
+        let primary = &tags[0];
 
         Ok(GenrePrediction {
-            label: primary.label,
+            label: genre_from_discogs_label(&primary.label),
             confidence: primary.confidence,
             tags,
         })
@@ -335,33 +267,31 @@ fn model_path(file_name: &str) -> Option<PathBuf> {
 fn load_embedding_model(path: &PathBuf) -> TractResult<RunnableModel> {
     tract_onnx::onnx()
         .model_for_path(path)?
-        .with_input_fact(0, f32::fact([1_i64, MEL_FRAMES as i64, MEL_BANDS as i64]).into())?
+        .with_input_fact(
+            0,
+            InferenceFact::dt_shape(f32::datum_type(), tvec!(1, MEL_FRAMES, MEL_BANDS)),
+        )?
         .into_optimized()?
         .into_runnable()
 }
 
-fn load_labels(model_path: &std::path::Path) -> Option<Vec<String>> {
+#[derive(serde::Deserialize)]
+struct DiscogsMetadata {
+    classes: Vec<String>,
+}
+
+fn load_labels(model_path: &std::path::Path) -> TractResult<Vec<String>> {
     let metadata_path = model_path.with_extension("json");
-    let content = std::fs::read_to_string(metadata_path).ok()?;
-    let metadata: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let labels = metadata
-        .get("classes")?
-        .as_array()?
-        .iter()
-        .filter_map(|value| value.as_str().map(normalize_tag_label))
-        .collect::<Vec<_>>();
-    (!labels.is_empty()).then_some(labels)
+    let content = std::fs::read_to_string(metadata_path)?;
+    let metadata: DiscogsMetadata = serde_json::from_str(&content)?;
+    Ok(metadata.classes)
 }
 
-fn normalize_tag_label(label: &str) -> String {
-    label.to_ascii_lowercase()
-}
-
-fn default_labels() -> Vec<String> {
-    DEFAULT_TAGS
-        .iter()
-        .map(|label| (*label).to_string())
-        .collect()
+fn genre_from_discogs_label(label: &str) -> String {
+    label
+        .split_once("---")
+        .map_or(label, |(genre, _)| genre)
+        .to_string()
 }
 
 fn build_mel_filters() -> Vec<Vec<(usize, f32)>> {
@@ -407,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_musicnn_models_run_one_prediction() {
+    fn bundled_discogs_effnet_model_runs_one_prediction() {
         let mut runtime = GenreModelRuntime::load().unwrap();
         let samples = vec![0.0; BUFFER_SAMPLES];
         let prediction = runtime.predict(&samples).unwrap();

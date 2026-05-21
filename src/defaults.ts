@@ -16,7 +16,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
 export const DEFAULT_THREEJS = `// setup() is called once. Return a state object.
 // update(state, time, dt, audio) is called every frame.
-// audio: { volume, bass, mid, treble, bpm, beat, beatPhase, beatCount, fft }
+// audio: { bpm, beat, beatPhase, beatCount, fft, genre }
 function setup(scene, camera, renderer) {
     camera.position.z = 3;
     const geo = new THREE.BoxGeometry(1, 1, 1);

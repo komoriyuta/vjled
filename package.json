@@ -4,11 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "fetch-models": "node scripts/fetch-models.mjs",
-    "dev": "npm run fetch-models && vite",
-    "build": "npm run fetch-models && tsc && vite build",
+    "dev": "vite",
+    "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "npm run fetch-models && tauri"
+    "tauri": "tauri"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

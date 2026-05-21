@@ -293,7 +293,7 @@ export default function ControlApp() {
   const handleAiGenerate = useCallback(
     async (sceneType: SceneType, prompt: string) => {
       try {
-        const code = await aiGenerate(sceneType, prompt);
+        const code = await aiGenerate(sceneType, addGenreHint(prompt, audio));
         addScene(sceneType);
         const currentScenes = useVJStore.getState().scenes;
         const nextScene = currentScenes[currentScenes.length - 1];
@@ -303,18 +303,18 @@ export default function ControlApp() {
         }
       } catch {}
     },
-    [aiGenerate, addScene, updateSceneCode, selectScene],
+    [aiGenerate, addScene, audio, updateSceneCode, selectScene],
   );
 
   const handleAiEdit = useCallback(
     async (prompt: string) => {
       if (!selectedScene) return;
       try {
-        const code = await aiGenerate(selectedScene.type, prompt, selectedScene.code);
+        const code = await aiGenerate(selectedScene.type, addGenreHint(prompt, audio), selectedScene.code);
         updateSceneCode(selectedScene.id, code);
       } catch {}
     },
-    [aiGenerate, selectedScene, updateSceneCode],
+    [aiGenerate, audio, selectedScene, updateSceneCode],
   );
 
   const updateAutoVJ = useCallback((patch: Partial<AutoVJSettings>) => {
@@ -1924,6 +1924,7 @@ function buildAutoPrompt(args: {
     "Create a new live VJ scene for the currently playing music.",
     `Trigger reason: ${args.reason}.`,
     `Detected mood: ${args.mood.label}.`,
+    `Detected genre: ${args.audio.genre}.`,
     `Detected music tags: ${args.audio.musicTags.length ? args.audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "unknown"}.`,
     `Audio features from the existing Aubio pipeline: BPM ${args.audio.bpm.toFixed(1)}, energy ${args.mood.energy.toFixed(2)}, bass ${args.mood.bass.toFixed(2)}, mid ${args.mood.mid.toFixed(2)}, treble ${args.mood.treble.toFixed(2)}.`,
     `Visual palette: ${args.mood.palette}.`,
@@ -1936,6 +1937,10 @@ function buildAutoPrompt(args: {
       ? "Use WebGL 1 compatible GLSL. Output only helper functions and void mainImage; do not declare uniforms or precision. Use iBpm, iBeat, iBeatPhase, iBeatCount, constant iFft indices like iFft[0]/iFft[16], and fftAt(float) for variable FFT access. Never emit iFft[i], iFft[idx], or iFft[int(x)]. Keep loops literal-bounded and avoid nested loops when possible."
       : "Use the audio object/globals for beat pulses, bass/mid/treble movement, and tempo-aware animation.",
   ].join("\n");
+}
+
+function addGenreHint(prompt: string, audio: AudioAnalysis): string {
+  return `${prompt}\n\nDetected genre: ${audio.genre}.`;
 }
 
 function sceneTypeLabel(type: SceneType): string {
