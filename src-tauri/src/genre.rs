@@ -1,11 +1,11 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, Context, Result};
 use crossbeam::channel::{bounded, Receiver, Sender};
+use ort::{inputs, session::Session, value::Tensor};
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tract_onnx::prelude::*;
 
 const MODEL_SAMPLE_RATE: u32 = 16_000;
 const MEL_BANDS: usize = 96;
@@ -18,9 +18,6 @@ const MEL_LOG_SCALE: f32 = 10_000.0;
 const MIN_SCORE_RANGE: f32 = 1e-6;
 
 const TAG_LIMIT: usize = 5;
-const DISCOGS_CLASSIFIER_OUTPUT: &str = "activations";
-const DISCOGS_EMBEDDING_OUTPUT: &str = "embeddings";
-const MOOD_HEAD_OUTPUT: &str = "model/Softmax";
 const EMBEDDING_SIZE: usize = 1280;
 
 const MOOD_HEADS: [MoodHeadSpec; 6] = [
@@ -76,8 +73,6 @@ pub struct MoodPrediction {
     pub confidence: f32,
 }
 
-type RunnableModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
-
 struct MoodHeadSpec {
     file_name: &'static str,
     positive_label: &'static str,
@@ -85,7 +80,7 @@ struct MoodHeadSpec {
 }
 
 struct MoodHead {
-    model: RunnableModel,
+    model: Session,
     labels: Vec<String>,
     positive_label: &'static str,
     display_label: &'static str,
@@ -175,7 +170,7 @@ impl GenreClassifier {
 }
 
 struct GenreModelRuntime {
-    discogs_model: RunnableModel,
+    discogs_model: Session,
     mood_heads: Vec<MoodHead>,
     labels: Vec<String>,
     fft: Arc<dyn Fft<f32>>,
@@ -184,7 +179,7 @@ struct GenreModelRuntime {
 }
 
 impl GenreModelRuntime {
-    fn load() -> TractResult<Self> {
+    fn load() -> Result<Self> {
         let model_path = model_path("discogs-effnet-bsdynamic-1.onnx")
             .filter(|path| path.exists())
             .ok_or_else(|| anyhow!("Discogs EffNet model is not bundled"))?;
@@ -203,16 +198,32 @@ impl GenreModelRuntime {
         })
     }
 
-    fn predict(&mut self, samples: &[f32]) -> TractResult<GenrePrediction> {
+    fn predict(&mut self, samples: &[f32]) -> Result<GenrePrediction> {
         let features = self.musicnn_mel_patch(samples);
-        let input = tract_ndarray::Array3::from_shape_vec((1, MEL_FRAMES, MEL_BANDS), features)?
-            .into_tensor();
-        let discogs_result = self.discogs_model.run(tvec!(input.into()))?;
-        let scores = discogs_result[0]
-            .to_array_view::<f32>()?
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+        let input = Tensor::<f32>::from_array((
+            [1usize, MEL_FRAMES, MEL_BANDS],
+            features.into_boxed_slice(),
+        ))?;
+        let (scores, embedding) = {
+            let discogs_result = self.discogs_model.run(inputs![input])?;
+            let scores = discogs_result
+                .get("activations")
+                .unwrap_or(&discogs_result[0])
+                .try_extract_tensor::<f32>()?
+                .1
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            let embedding = discogs_result
+                .get("embeddings")
+                .unwrap_or(&discogs_result[1])
+                .try_extract_tensor::<f32>()?
+                .1
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
+            (scores, embedding)
+        };
         if scores.len() != self.labels.len() {
             return Err(anyhow!(
                 "Discogs classifier output length mismatch: got {}, expected {} labels",
@@ -227,20 +238,14 @@ impl GenreModelRuntime {
                 (min.min(*score), max.max(*score))
             });
         if max_score - min_score < MIN_SCORE_RANGE {
-            return Err(anyhow!("Discogs classifier output is flat").into());
+            return Err(anyhow!("Discogs classifier output is flat"));
         }
-        let embedding = discogs_result[1]
-            .to_array_view::<f32>()?
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
         if embedding.len() != EMBEDDING_SIZE {
             return Err(anyhow!(
                 "Discogs embedding length mismatch: got {}, expected {}",
                 embedding.len(),
                 EMBEDDING_SIZE
-            )
-            .into());
+            ));
         }
         let moods = self.predict_moods(&embedding)?;
         let mut tags = scores
@@ -263,15 +268,20 @@ impl GenreModelRuntime {
         })
     }
 
-    fn predict_moods(&mut self, embedding: &[f32]) -> TractResult<Vec<MoodPrediction>> {
-        let input = tract_ndarray::Array2::from_shape_vec((1, EMBEDDING_SIZE), embedding.to_vec())?
-            .into_tensor();
+    fn predict_moods(&mut self, embedding: &[f32]) -> Result<Vec<MoodPrediction>> {
         let mut moods = Vec::with_capacity(self.mood_heads.len());
 
         for head in &mut self.mood_heads {
-            let result = head.model.run(tvec!(input.clone().into()))?;
-            let scores = result[0]
-                .to_array_view::<f32>()?
+            let input = Tensor::<f32>::from_array((
+                [1usize, EMBEDDING_SIZE],
+                embedding.to_vec().into_boxed_slice(),
+            ))?;
+            let result = head.model.run(inputs![input])?;
+            let scores = result
+                .get("model/Softmax")
+                .unwrap_or(&result[0])
+                .try_extract_tensor::<f32>()?
+                .1
                 .iter()
                 .copied()
                 .collect::<Vec<_>>();
@@ -357,6 +367,7 @@ fn model_path(file_name: &str) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("models").join(file_name));
             candidates.push(parent.join("../Resources/models").join(file_name));
         }
     }
@@ -379,19 +390,13 @@ fn model_path(file_name: &str) -> Option<PathBuf> {
         })
 }
 
-fn load_discogs_model(path: &PathBuf) -> TractResult<RunnableModel> {
-    tract_onnx::onnx()
-        .model_for_path(path)?
-        .with_input_fact(
-            0,
-            InferenceFact::dt_shape(f32::datum_type(), tvec!(1, MEL_FRAMES, MEL_BANDS)),
-        )?
-        .with_output_names([DISCOGS_CLASSIFIER_OUTPUT, DISCOGS_EMBEDDING_OUTPUT])?
-        .into_optimized()?
-        .into_runnable()
+fn load_discogs_model(path: &PathBuf) -> Result<Session> {
+    Session::builder()?
+        .commit_from_file(path)
+        .with_context(|| format!("Failed to load Discogs EffNet model: {}", path.display()))
 }
 
-fn load_mood_heads() -> TractResult<Vec<MoodHead>> {
+fn load_mood_heads() -> Result<Vec<MoodHead>> {
     MOOD_HEADS
         .iter()
         .map(|spec| {
@@ -399,15 +404,9 @@ fn load_mood_heads() -> TractResult<Vec<MoodHead>> {
                 .filter(|path| path.exists())
                 .ok_or_else(|| anyhow!("Mood head model is not bundled: {}", spec.file_name))?;
             let labels = load_labels(&path)?;
-            let model = tract_onnx::onnx()
-                .model_for_path(&path)?
-                .with_input_fact(
-                    0,
-                    InferenceFact::dt_shape(f32::datum_type(), tvec!(1, EMBEDDING_SIZE)),
-                )?
-                .with_output_names([MOOD_HEAD_OUTPUT])?
-                .into_optimized()?
-                .into_runnable()?;
+            let model = Session::builder()?
+                .commit_from_file(&path)
+                .with_context(|| format!("Failed to load mood head model: {}", path.display()))?;
 
             Ok(MoodHead {
                 model,
@@ -424,7 +423,7 @@ struct DiscogsMetadata {
     classes: Vec<String>,
 }
 
-fn load_labels(model_path: &std::path::Path) -> TractResult<Vec<String>> {
+fn load_labels(model_path: &std::path::Path) -> Result<Vec<String>> {
     let metadata_path = model_path.with_extension("json");
     let content = std::fs::read_to_string(metadata_path)?;
     let metadata: DiscogsMetadata = serde_json::from_str(&content)?;
