@@ -25,8 +25,7 @@ interface RendererEntry {
   canvas: HTMLCanvasElement;
 }
 
-const SCENE_CARD_PREVIEW_INTERVAL_MS = 250;
-const MAX_SCENE_CARD_PREVIEWS = 8;
+const MAX_SCENE_CARD_PREVIEWS = Infinity;
 
 function copyCanvas(src: HTMLCanvasElement | null, dst: HTMLCanvasElement | null) {
   if (!src || !dst) return;
@@ -194,20 +193,11 @@ export function useEngine(opts: UseEngineOptions) {
 
       const syncVersion = ++syncVersionRef.current;
 
-      const { scenes, busA, busB, selectedSceneId } = state;
+      const { scenes } = state;
       const activeScenes = scenes.filter((scene) => !scene.renderPaused);
       const activeIds = new Set<string>();
-      if (busA && activeScenes.some((scene) => scene.id === busA)) activeIds.add(busA);
-      if (busB && activeScenes.some((scene) => scene.id === busB)) activeIds.add(busB);
-      const hasSelectedPreview = !!selectedPreviewRef || (selectedPreviewRefs?.length ?? 0) > 0;
-      if (hasSelectedPreview && selectedSceneId && activeScenes.some((scene) => scene.id === selectedSceneId)) activeIds.add(selectedSceneId);
-      let previewCount = 0;
-      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
-        if (previewCount >= MAX_SCENE_CARD_PREVIEWS) break;
-        if (canvas && activeScenes.some((scene) => scene.id === id)) {
-          activeIds.add(id);
-          previewCount++;
-        }
+      for (const scene of activeScenes) {
+        activeIds.add(scene.id);
       }
 
       for (const [id, entry] of renderersRef.current) {
@@ -216,6 +206,7 @@ export function useEngine(opts: UseEngineOptions) {
           entry.canvas.remove();
           renderersRef.current.delete(id);
           codeCacheRef.current.delete(id);
+          controlCacheRef.current.delete(id);
         }
       }
 
@@ -294,16 +285,8 @@ export function useEngine(opts: UseEngineOptions) {
       const activeBusB = busB && !sceneById.get(busB)?.renderPaused ? busB : null;
       const activeSelectedSceneId = selectedSceneId && !sceneById.get(selectedSceneId)?.renderPaused ? selectedSceneId : null;
       const activeRenderIds = new Set<string>();
-      if (activeBusA) activeRenderIds.add(activeBusA);
-      if (activeBusB) activeRenderIds.add(activeBusB);
-      if (activeSelectedSceneId) activeRenderIds.add(activeSelectedSceneId);
-      let activePreviewCount = 0;
-      for (const [id, canvas] of scenePreviewCanvasesRef?.current ?? []) {
-        if (activePreviewCount >= MAX_SCENE_CARD_PREVIEWS) break;
-        if (canvas && !sceneById.get(id)?.renderPaused) {
-          activeRenderIds.add(id);
-          activePreviewCount++;
-        }
+      for (const scene of scenes) {
+        if (!scene.renderPaused) activeRenderIds.add(scene.id);
       }
       for (const id of activeRenderIds) {
         const scene = sceneById.get(id);
@@ -316,6 +299,7 @@ export function useEngine(opts: UseEngineOptions) {
         entry.canvas.remove();
         renderersRef.current.delete(id);
         codeCacheRef.current.delete(id);
+        controlCacheRef.current.delete(id);
         scenePreviewLastUpdateRef.current.delete(id);
       }
 
@@ -357,13 +341,7 @@ export function useEngine(opts: UseEngineOptions) {
             updatedIds.add(activeBusB);
           }
         }
-        if (activeSelectedSceneId && activeSelectedSceneId !== activeBusA && activeSelectedSceneId !== activeBusB) {
-          const entry = renderersRef.current.get(activeSelectedSceneId);
-          if (entry) {
-            entry.renderer.update(time, dt, audio);
-            updatedIds.add(activeSelectedSceneId);
-          }
-        }
+
         const lookup = new Map(scenes.map((s) => [s.id, s]));
         const cA = activeBusA ? renderersRef.current.get(activeBusA)?.canvas ?? null : null;
         const cB = activeBusB ? renderersRef.current.get(activeBusB)?.canvas ?? null : null;
@@ -375,6 +353,13 @@ export function useEngine(opts: UseEngineOptions) {
           keyA: sceneA?.key,
           keyB: sceneB?.key,
         });
+
+        for (const [id, entry] of renderersRef.current) {
+          if (updatedIds.has(id)) continue;
+          if (sceneById.get(id)?.renderPaused) continue;
+          entry.renderer.update(time, dt, audio);
+          updatedIds.add(id);
+        }
 
         copyCanvas(cA, busAPreviewRef?.current ?? null);
         if (!cA) clearCanvas(busAPreviewRef?.current);
@@ -393,13 +378,6 @@ export function useEngine(opts: UseEngineOptions) {
           if (!entry) {
             clearCanvas(canvas);
             continue;
-          }
-          if (!updatedIds.has(id)) {
-            const last = scenePreviewLastUpdateRef.current.get(id) ?? 0;
-            if (now - last >= SCENE_CARD_PREVIEW_INTERVAL_MS) {
-              entry.renderer.update(time, dt, audio);
-              scenePreviewLastUpdateRef.current.set(id, now);
-            }
           }
           copyCanvas(entry.canvas, canvas);
         }

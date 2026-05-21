@@ -101,6 +101,7 @@ export class GLSLRenderer implements Renderer {
       premultipliedAlpha: false,
       preserveDrawingBuffer: true,
       antialias: false,
+      powerPreference: "high-performance",
     });
     if (!this.gl) return;
     this.quadBuffer = createFullscreenQuad(this.gl);

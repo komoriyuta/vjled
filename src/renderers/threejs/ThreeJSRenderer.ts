@@ -17,6 +17,7 @@ export class ThreeJSRenderer implements Renderer {
       canvas,
       alpha: true,
       preserveDrawingBuffer: true,
+      powerPreference: "high-performance",
     });
     this.renderer.setClearColor(0x000000, 1);
     this.scene = new THREE.Scene();

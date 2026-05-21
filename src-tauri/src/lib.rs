@@ -30,7 +30,7 @@ struct AppState {
 }
 
 #[cfg(target_os = "linux")]
-fn configure_camera_webview<R: tauri::Runtime>(
+fn configure_webview<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), String> {
     window
@@ -39,6 +39,10 @@ fn configure_camera_webview<R: tauri::Runtime>(
 
             let inner = webview.inner();
             if let Some(settings) = inner.settings() {
+                settings.set_hardware_acceleration_policy(
+                    webkit2gtk::HardwareAccelerationPolicy::Always,
+                );
+                settings.set_enable_webgl(true);
                 settings.set_enable_media(true);
                 settings.set_enable_media_stream(true);
             }
@@ -52,7 +56,7 @@ fn configure_camera_webview<R: tauri::Runtime>(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_camera_webview<R: tauri::Runtime>(
+fn configure_webview<R: tauri::Runtime>(
     _window: &tauri::WebviewWindow<R>,
 ) -> Result<(), String> {
     Ok(())
@@ -60,7 +64,7 @@ fn configure_camera_webview<R: tauri::Runtime>(
 
 #[tauri::command]
 fn camera_prepare_window(window: tauri::WebviewWindow) -> Result<(), String> {
-    configure_camera_webview(&window)
+    configure_webview(&window)
 }
 
 #[tauri::command]
@@ -326,12 +330,13 @@ pub fn run() {
             });
             if let Some(output_window) = app.get_webview_window("output") {
                 let _ = output_window.set_title("VJLED - Output");
+                let _ = configure_webview(&output_window);
             }
             if let Some(control_window) = app.get_webview_window("control") {
-                let _ = configure_camera_webview(&control_window);
+                let _ = configure_webview(&control_window);
             }
             if let Some(mapping_window) = app.get_webview_window("led-mapping") {
-                let _ = configure_camera_webview(&mapping_window);
+                let _ = configure_webview(&mapping_window);
             }
             Ok(())
         })

@@ -4,7 +4,6 @@ import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
 import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
 import { emitVJAudio, emitVJRuntime, emitVJState, listenVJStateRequest } from "../../events/vjEvents";
-import { sendLedFrame } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
 import { useEngine } from "../../hooks/useEngine";
 import { createProjectData, parseProjectData } from "../../project";
@@ -150,7 +149,6 @@ const mixLabels: Record<MixMode, string> = {
 
 const blendModes: MixMode[] = ["crossfade", "additive", "screen", "multiply", "overlay", "softLight", "difference", "lighten", "darken"];
 const transitionModes: MixMode[] = ["wipeLeft", "wipeRight", "wipeUp", "wipeDown", "circle", "diamond", "dissolve", "luma", "ripple", "glitch", "rgbSplit"];
-const AUDIO_UI_INTERVAL_MS = 250;
 
 const defaultSceneKey: SceneKeySettings = {
   enabled: false,
@@ -217,17 +215,11 @@ export default function ControlApp() {
 
   useAudioAnalysis();
   const [audio, setAudioForUi] = useState(() => useVJStore.getState().audio);
-  const audioUiLastUpdateRef = useRef(0);
 
   useEffect(() => {
     return useVJStore.subscribe((state, previous) => {
       if (state.audio === previous.audio) return;
-      const now = performance.now();
-      const beatChanged = state.audio.beatCount !== previous.audio.beatCount;
-      if (beatChanged || now - audioUiLastUpdateRef.current >= AUDIO_UI_INTERVAL_MS) {
-        audioUiLastUpdateRef.current = now;
-        setAudioForUi(state.audio);
-      }
+      setAudioForUi(state.audio);
     });
   }, []);
 
@@ -235,8 +227,6 @@ export default function ControlApp() {
   const setAudioEnabled = useVJStore((s) => s.setAudioEnabled);
   const setAudioDevice = useVJStore((s) => s.setAudioDevice);
   const ledLoadProject = useLedStore((s) => s.loadProject);
-  const ledConfig = useLedStore((s) => s.config);
-  const ledPoints = useLedStore((s) => s.calibrationPoints);
 
   const outputPreviewRef = useRef<HTMLDivElement>(null);
   const busACanvasRef = useRef<HTMLCanvasElement>(null);
@@ -245,7 +235,6 @@ export default function ControlApp() {
   const contextSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const codeSelectedCanvasRef = useRef<HTMLCanvasElement>(null);
   const scenePreviewCanvasesRef = useRef<Map<string, HTMLCanvasElement | null>>(new Map());
-  const ledFrameRef = useRef(0);
   const selectedPreviewRefs = useMemo(
     () => [contextSelectedCanvasRef, codeSelectedCanvasRef],
     [],
@@ -698,33 +687,6 @@ export default function ControlApp() {
       setLedMappingStatus(`Failed to open calibration window: ${String(e)}`);
     }
   }, []);
-
-  useEffect(() => {
-    if (!ledConfig.enabled || ledPoints.length === 0) return;
-    let running = true;
-    let lastSend = 0;
-    const interval = 1000 / 30;
-
-    const loop = () => {
-      if (!running) return;
-      const now = performance.now();
-      if (now - lastSend >= interval) {
-        lastSend = now;
-        const canvas = outputPreviewRef.current?.querySelector("canvas") as HTMLCanvasElement | null;
-        const ctx = canvas?.getContext("2d");
-        if (canvas && ctx) {
-          sendLedFrame(ctx, canvas.width, canvas.height, ledPoints, ledConfig);
-        }
-      }
-      ledFrameRef.current = requestAnimationFrame(loop);
-    };
-    ledFrameRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      running = false;
-      cancelAnimationFrame(ledFrameRef.current);
-    };
-  }, [ledConfig.enabled, ledConfig, ledPoints]);
 
   useEffect(() => {
     const buildStatePayload = () => {

@@ -315,7 +315,7 @@ impl GenreModelRuntime {
 
             let spectrum: Vec<f32> = self.fft_buffer[..FFT_SIZE / 2 + 1]
                 .iter()
-                .map(|c| (c.re * c.re + c.im * c.im).sqrt())
+                .map(|c| c.re * c.re + c.im * c.im)
                 .collect();
 
             for band in 0..MEL_BANDS {

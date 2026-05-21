@@ -199,7 +199,7 @@ export class Compositor {
 
   init(canvas: HTMLCanvasElement): void {
     this.canvas = canvas;
-    const gl = canvas.getContext("webgl", { alpha: false, preserveDrawingBuffer: true });
+    const gl = canvas.getContext("webgl", { alpha: false, preserveDrawingBuffer: true, antialias: false, powerPreference: "high-performance", desynchronized: true });
     if (!gl) return;
     this.gl = gl;
 
