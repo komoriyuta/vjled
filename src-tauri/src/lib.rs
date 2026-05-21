@@ -15,6 +15,12 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
 
+// CEF ランタイムを使用。wry (WebKit) から Chromium ベースの CEF に切り替え。
+#[cfg(feature = "cef")]
+type TauriRuntime = tauri::Cef;
+#[cfg(not(feature = "cef"))]
+type TauriRuntime = tauri::Wry;
+
 #[derive(Debug, serde::Serialize)]
 struct NativeGpuDiagnostics {
     renderer: String,
@@ -30,42 +36,11 @@ struct AppState {
     video_server_port: u16,
 }
 
-#[cfg(target_os = "linux")]
-fn configure_webview<R: tauri::Runtime>(
-    window: &tauri::WebviewWindow<R>,
-) -> Result<(), String> {
-    window
-        .with_webview(|webview| {
-            use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
-
-            let inner = webview.inner();
-            if let Some(settings) = inner.settings() {
-                settings.set_hardware_acceleration_policy(
-                    webkit2gtk::HardwareAccelerationPolicy::Always,
-                );
-                settings.set_enable_webgl(true);
-                settings.set_enable_media(true);
-                settings.set_enable_media_stream(true);
-            }
-
-            inner.connect_permission_request(|_, request| {
-                request.allow();
-                true
-            });
-        })
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn configure_webview<R: tauri::Runtime>(
-    _window: &tauri::WebviewWindow<R>,
-) -> Result<(), String> {
-    Ok(())
-}
-
+// CEF は Chromium 内部で WebGL・メディア・パーミッションを自動的に処理するため、
+// WebKit2GTK の手動設定は不要。
 #[tauri::command]
-fn camera_prepare_window(window: tauri::WebviewWindow) -> Result<(), String> {
-    configure_webview(&window)
+fn camera_prepare_window(_window: tauri::WebviewWindow<TauriRuntime>) -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]
@@ -246,7 +221,7 @@ fn audio_list_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 fn audio_start(
     device: Option<String>,
     state: State<AppState>,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<TauriRuntime>,
 ) -> Result<(), String> {
     let mut audio = state.audio.lock().map_err(|e| e.to_string())?;
     audio.start(device, app)
@@ -306,8 +281,14 @@ fn native_gpu_diagnostics() -> NativeGpuDiagnostics {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg_attr(feature = "cef", tauri::cef_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::<TauriRuntime>::new();
+
+    #[cfg(all(feature = "cef", debug_assertions, target_os = "linux"))]
+    let builder = builder.command_line_args([("no-sandbox", None::<String>)]);
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -345,16 +326,6 @@ pub fn run() {
                 audio: Mutex::new(AudioCapture::new()),
                 video_server_port: server.port,
             });
-            if let Some(output_window) = app.get_webview_window("output") {
-                let _ = output_window.set_title("VJLED - Output");
-                let _ = configure_webview(&output_window);
-            }
-            if let Some(control_window) = app.get_webview_window("control") {
-                let _ = configure_webview(&control_window);
-            }
-            if let Some(mapping_window) = app.get_webview_window("led-mapping") {
-                let _ = configure_webview(&mapping_window);
-            }
             Ok(())
         })
         .run(tauri::generate_context!())

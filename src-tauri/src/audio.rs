@@ -11,7 +11,13 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
+
+// CEF ランタイムに合わせた AppHandle 型エイリアス
+#[cfg(feature = "cef")]
+type AppHandle = tauri::AppHandle<tauri::Cef>;
+#[cfg(not(feature = "cef"))]
+type AppHandle = tauri::AppHandle<tauri::Wry>;
 
 const FFT_SIZE: usize = 1024;
 const HOP_SIZE: usize = 256;

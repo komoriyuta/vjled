@@ -17,8 +17,17 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = ["cef"]
+cef = []
+
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", default-features = false, features = [
+  "cef",
+  "protocol-asset",
+  "compression",
+  "dynamic-acl",
+] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,6 +42,11 @@ tract-onnx = "0.21"
 ort = "2.0.0-rc.12"
 anyhow = "1"
 
-
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = "2.0.2"
+# CEF: tauri の feat/cef ブランチを使用して WebKit を Chromium に置き換える
+[patch.crates-io]
+tauri = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
+tauri-build = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
+tauri-macros = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
+tauri-runtime = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
+tauri-utils = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
+tauri-plugin = { git = "https://github.com/tauri-apps/tauri", rev = "0e5b4b713e75a423f3d32b704d67e289fb249a39" }
