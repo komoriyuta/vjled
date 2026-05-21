@@ -351,6 +351,14 @@ pub fn run() {
             }
             if let Some(control_window) = app.get_webview_window("control") {
                 let _ = configure_webview(&control_window);
+                let app_handle = app.handle().clone();
+                control_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        if let Some(output_window) = app_handle.get_webview_window("output") {
+                            let _ = output_window.close();
+                        }
+                    }
+                });
             }
             if let Some(mapping_window) = app.get_webview_window("led-mapping") {
                 let _ = configure_webview(&mapping_window);
