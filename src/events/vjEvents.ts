@@ -28,10 +28,18 @@ export interface LedStatePayload {
   connected: boolean;
 }
 
+export interface VJRuntimePayload {
+  crossfade: number;
+  mix: MixSettings;
+  isPlaying: boolean;
+}
+
 type Handler<T> = (payload: T) => void;
 type Unlisten = () => void;
 
 const LOCAL_VJ_STATE = "vjled:vj-state";
+const LOCAL_VJ_AUDIO = "vjled:vj-audio";
+const LOCAL_VJ_RUNTIME = "vjled:vj-runtime";
 const LOCAL_VIDEO_CMD = "vjled:video-cmd";
 const LOCAL_STATE_REQUEST = "vjled:vj-state-request";
 const LOCAL_LED_STATE = "vjled:led-state";
@@ -65,6 +73,34 @@ export function emitVJState(payload: VJStatePayload): void {
 export async function listenVJState(handler: Handler<VJStatePayload>): Promise<Unlisten> {
   const localUnlisten = listenLocal<VJStatePayload>(LOCAL_VJ_STATE, handler);
   const tauriUnlisten = await listenTauri<VJStatePayload>("vj-state", handler);
+  return () => {
+    localUnlisten();
+    tauriUnlisten?.();
+  };
+}
+
+export function emitVJAudio(payload: AudioAnalysis): void {
+  emitLocal(LOCAL_VJ_AUDIO, payload);
+  emitTauri("vj-audio", payload);
+}
+
+export async function listenVJAudio(handler: Handler<AudioAnalysis>): Promise<Unlisten> {
+  const localUnlisten = listenLocal<AudioAnalysis>(LOCAL_VJ_AUDIO, handler);
+  const tauriUnlisten = await listenTauri<AudioAnalysis>("vj-audio", handler);
+  return () => {
+    localUnlisten();
+    tauriUnlisten?.();
+  };
+}
+
+export function emitVJRuntime(payload: VJRuntimePayload): void {
+  emitLocal(LOCAL_VJ_RUNTIME, payload);
+  emitTauri("vj-runtime", payload);
+}
+
+export async function listenVJRuntime(handler: Handler<VJRuntimePayload>): Promise<Unlisten> {
+  const localUnlisten = listenLocal<VJRuntimePayload>(LOCAL_VJ_RUNTIME, handler);
+  const tauriUnlisten = await listenTauri<VJRuntimePayload>("vj-runtime", handler);
   return () => {
     localUnlisten();
     tauriUnlisten?.();

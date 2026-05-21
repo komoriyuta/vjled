@@ -98,6 +98,7 @@ export class GpuPixelSampler {
       depth: false,
       stencil: false,
       preserveDrawingBuffer: false,
+      powerPreference: "high-performance",
     });
     if (!gl) throw new Error("WebGL2 is unavailable");
 

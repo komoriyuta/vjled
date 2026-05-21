@@ -256,6 +256,12 @@ if (typeof setup === 'function') {
     __syncP5Globals();
     setup();
     __syncP5Globals();
+    p.noLoop();
+  };
+} else {
+  p.setup = function() {
+    __syncP5Globals();
+    p.noLoop();
   };
 }
 if (typeof draw === 'function') {
@@ -323,6 +329,9 @@ if (typeof mouseDragged === 'function') {
     this.audio = audio;
     if (this.p5Instance) {
       (this.p5Instance as unknown as { __vjAudio: AudioAnalysis }).__vjAudio = audio;
+      try {
+        this.p5Instance.redraw();
+      } catch {}
     }
     if (!this.canvas || !this.container) return;
     const pCanvas = this.container.querySelector("canvas");

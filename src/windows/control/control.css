@@ -31,7 +31,7 @@ button { color: inherit; }
   width: 100vw;
   height: 100vh;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: 44px minmax(0, 1fr) 78px;
   overflow: hidden;
   background: var(--bg);
 }
@@ -57,6 +57,7 @@ button { color: inherit; }
 .brand__sub, .help, .field label { color: var(--muted); }
 .topbar__status { display: flex; gap: 8px; min-width: 0; }
 .status-chip {
+  min-width: 0;
   min-height: 24px;
   display: inline-flex;
   align-items: center;
@@ -69,6 +70,19 @@ button { color: inherit; }
   font-size: 11px;
   white-space: nowrap;
 }
+.status-chip--auto {
+  max-width: min(520px, 34vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-chip--gpu,
+.status-chip--warn {
+  max-width: min(360px, 22vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-chip--gpu { border-color: rgba(52, 211, 153, 0.45); color: #a7f3d0; }
+.status-chip--warn { border-color: rgba(245, 158, 11, 0.55); color: #fcd34d; }
 .status-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--dim); }
 .status-dot.is-live { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
 
@@ -168,6 +182,8 @@ button { color: inherit; }
   cursor: pointer;
 }
 .scene-card.is-selected { border-color: var(--type); background: var(--surface-high); }
+.scene-card.is-render-paused { opacity: 0.62; }
+.scene-card.is-render-paused .scene-card__preview { filter: grayscale(1); }
 .scene-card__preview {
   aspect-ratio: 16 / 9;
   width: 100%;
@@ -200,7 +216,7 @@ button { color: inherit; }
 .scene-card__badge { color: var(--type); font-size: 9px; }
 .scene-card__actions {
   display: grid;
-  grid-template-columns: 1fr 1fr 26px;
+  grid-template-columns: 1fr 1fr 42px 26px;
   gap: 6px;
   margin-top: 8px;
 }
@@ -227,7 +243,7 @@ button { color: inherit; }
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-rows: minmax(260px, 1fr) 128px 72px;
+  grid-template-rows: minmax(260px, 1fr) 128px;
   gap: 10px;
   padding: 10px;
 }
@@ -241,6 +257,13 @@ button { color: inherit; }
 }
 .bus-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; min-height: 0; }
 .render-mount { width: 100%; height: 100%; }
+.global-transport {
+  min-width: 0;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 8px 10px;
+}
 
 .preview-frame {
   min-height: 0;
@@ -497,6 +520,78 @@ button { color: inherit; }
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--cyan), var(--rose));
+}
+.mood-scores {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #080a0c;
+}
+.mood-score {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) 38px;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+.mood-score > div {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: #050607;
+}
+.mood-score > div > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--green), var(--cyan), var(--rose));
+}
+.mood-score > strong {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+.auto-vj__log {
+  display: grid;
+  gap: 0;
+  max-height: 190px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #07090b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.35;
+}
+.auto-vj__log-line {
+  display: grid;
+  grid-template-columns: 58px 64px minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+.auto-vj__log-line:last-child { border-bottom: 0; }
+.auto-vj__log-line > span:nth-child(2) {
+  color: var(--cyan);
+  font-weight: 900;
+}
+.auto-vj__log-line > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.auto-vj__log-line.is-error > span:nth-child(2) { color: var(--rose); }
+.auto-vj__log-line.is-generate > span:nth-child(2) { color: var(--green); }
+.auto-vj__log-line.is-switch > span:nth-child(2) { color: var(--video); }
+.auto-vj__log-line.is-guard > span:nth-child(2) { color: #facc15; }
+.auto-vj__log-empty {
+  padding: 8px;
+  color: var(--muted);
 }
 .help { font-size: 11px; line-height: 1.45; margin: 0; }
 .empty-state {

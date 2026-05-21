@@ -20,6 +20,7 @@ interface AiStore {
     prompt: string,
     existingCode?: string,
   ) => Promise<string>;
+  decideAutoVJ: (prompt: string) => Promise<string>;
 }
 
 const STORAGE_KEY = "vjled-ai-config";
@@ -69,6 +70,22 @@ export const useAiStore = create<AiStore>((set, get) => ({
     } catch (e) {
       const errMsg = String(e);
       set({ generating: false, error: errMsg });
+      throw new Error(errMsg);
+    }
+  },
+
+  decideAutoVJ: async (prompt) => {
+    const { config } = get();
+    try {
+      return await invoke<string>("ai_decide_auto_vj", {
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        model: config.model,
+        prompt,
+      });
+    } catch (e) {
+      const errMsg = String(e);
+      set({ error: errMsg });
       throw new Error(errMsg);
     }
   },

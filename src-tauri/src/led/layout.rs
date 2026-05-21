@@ -105,10 +105,7 @@ impl HardwareLayout {
 
         for (di, dev) in self.devices.iter().enumerate() {
             let controller_ip = dev.controller_ip.clone().unwrap_or_else(|| {
-                let parts: Vec<u8> = ip_start
-                    .split('.')
-                    .filter_map(|p| p.parse().ok())
-                    .collect();
+                let parts: Vec<u8> = ip_start.split('.').filter_map(|p| p.parse().ok()).collect();
                 if parts.len() == 4 {
                     let last = parts[3] as u32 + (di as u32) * ip_stride;
                     format!("{}.{}.{}.{}", parts[0], parts[1], parts[2], last)

@@ -72,12 +72,7 @@ impl Calibrator {
         self.baseline.is_some()
     }
 
-    pub fn detect_led(
-        &self,
-        lit_frame: &[u8],
-        width: usize,
-        height: usize,
-    ) -> Option<(f64, f64)> {
+    pub fn detect_led(&self, lit_frame: &[u8], width: usize, height: usize) -> Option<(f64, f64)> {
         let baseline = self.baseline.as_ref()?;
         if baseline.len() != lit_frame.len() || width != self.width || height != self.height {
             return None;
