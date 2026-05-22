@@ -244,6 +244,7 @@ export class Compositor {
     if (!gl) return;
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     const size = slot === "A" ? this.texASize : this.texBSize;
     if (!size || size[0] !== source.width || size[1] !== source.height) {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
