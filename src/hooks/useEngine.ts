@@ -76,6 +76,19 @@ function programSourceIds(busA: string | null, busB: string | null, selectedScen
   return { sourceA, sourceB };
 }
 
+function ledSourceCanvas(
+  sourceSceneId: string | null | undefined,
+  sceneById: Map<string, Scene>,
+  renderers: Map<string, RendererEntry>,
+  programCanvas: HTMLCanvasElement | null,
+): HTMLCanvasElement | null {
+  if (!sourceSceneId) return programCanvas;
+  const scene = sceneById.get(sourceSceneId);
+  if (!scene) return programCanvas;
+  if (scene.renderPaused) return null;
+  return renderers.get(sourceSceneId)?.canvas ?? null;
+}
+
 export function useEngine(opts: UseEngineOptions) {
   const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints, enableLedOutput = true } = opts;
 
@@ -410,14 +423,19 @@ export function useEngine(opts: UseEngineOptions) {
         const now2 = performance.now();
         if (!ledSendInFlightRef.current && ledSendTimerRef.current === null && now2 - ledLastSendRef.current >= 33) {
           ledLastSendRef.current = now2;
-          const compCanvas = compositorCanvasRef.current;
+          const sourceCanvas = ledSourceCanvas(
+            ledConfigRef.current.sourceSceneId,
+            sceneById,
+            renderersRef.current,
+            compositorCanvasRef.current,
+          );
           const points = ledPointsRef.current;
           const config = ledConfigRef.current;
           ledSendTimerRef.current = window.setTimeout(() => {
             ledSendTimerRef.current = null;
-            if (disposedRef.current || !config?.enabled || points.length === 0) return;
+            if (disposedRef.current || !config?.enabled || points.length === 0 || !sourceCanvas) return;
             ledSendInFlightRef.current = true;
-            void sendLedFrameFromCanvas(compCanvas, points, config)
+            void sendLedFrameFromCanvas(sourceCanvas, points, config)
               .finally(() => {
                 ledSendInFlightRef.current = false;
               });

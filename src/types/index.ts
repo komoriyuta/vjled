@@ -111,6 +111,7 @@ export interface LayoutInfo {
 
 export interface LedConfig {
   enabled: boolean;
+  sourceSceneId: string | null;
   brightness: number;
   colorGain: [number, number, number];
   broadcastIp: string;

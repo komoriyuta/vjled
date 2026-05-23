@@ -6,6 +6,7 @@ const LEGACY_MAPPING_VIEW_STORAGE_KEY = "vjled:led-mapping-view:v1";
 
 const defaultLedConfig: LedConfig = {
   enabled: false,
+  sourceSceneId: null,
   brightness: 0.65,
   colorGain: [1.0, 1.0, 1.0],
   broadcastIp: "255.255.255.255",
