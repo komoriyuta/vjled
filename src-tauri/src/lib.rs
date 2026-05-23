@@ -15,9 +15,9 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
 
-#[cfg(all(feature = "cef", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 type TauriRuntime = tauri::Cef;
-#[cfg(not(all(feature = "cef", target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 type TauriRuntime = tauri::Wry;
 
 #[derive(Debug, serde::Serialize)]

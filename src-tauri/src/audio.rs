@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 
-#[cfg(all(feature = "cef", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 type AppHandle = tauri::AppHandle<tauri::Cef>;
-#[cfg(not(all(feature = "cef", target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 type AppHandle = tauri::AppHandle<tauri::Wry>;
 
 const FFT_SIZE: usize = 1024;
