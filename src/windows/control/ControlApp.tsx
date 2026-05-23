@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
 import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
@@ -26,8 +27,12 @@ import {
   chooseProjectSavePath,
   chooseLayoutPath,
   chooseVideoPath,
+  assignOutputsToMonitors,
+  closeOutputWindows,
   getNativeGpuDiagnostics,
+  listOutputMonitors,
   loadProjectFile,
+  type OutputMonitor,
   type NativeGpuDiagnostics,
   resolveVideoUrl,
   saveProject,
@@ -273,6 +278,7 @@ export default function ControlApp() {
   const autoLastSnapshotAtRef = useRef(0);
   const autoLastStatusAtRef = useRef(0);
   const autoPrimedRef = useRef(false);
+  const clockStartedAtRef = useRef(performance.now());
 
   const aiConfig = useAiStore((s) => s.config);
   const aiGenerating = useAiStore((s) => s.generating);
@@ -701,6 +707,30 @@ export default function ControlApp() {
   }, [autoVJ.enabled]);
 
   useEffect(() => {
+    let closing = false;
+    const currentWindow = getCurrentWindow();
+    const unlisten = currentWindow.onCloseRequested(async (event) => {
+      if (closing) return;
+      event.preventDefault();
+      closing = true;
+      try {
+        await closeOutputWindows();
+      } finally {
+        await currentWindow.destroy();
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentClock = () => ({
+      clockTimeSeconds: (performance.now() - clockStartedAtRef.current) / 1000,
+      clockSentAtMs: Date.now(),
+    });
+
     const buildStatePayload = () => {
       const state = useVJStore.getState();
       return {
@@ -712,6 +742,7 @@ export default function ControlApp() {
         isPlaying: state.isPlaying,
         selectedSceneId: state.selectedSceneId,
         audio: state.audio,
+        ...currentClock(),
       };
     };
 
@@ -749,6 +780,7 @@ export default function ControlApp() {
           crossfade: state.crossfade,
           mix: state.mix,
           isPlaying: state.isPlaying,
+          ...currentClock(),
         });
         return;
       }
@@ -1350,6 +1382,56 @@ function ProjectPanel({ onSave, onLoad, scenes, selectedScene }: { onSave: () =>
 }
 
 function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDecorated, onToggleOutputDecorations }: Parameters<typeof MainWorkspace>[0]) {
+  const [monitors, setMonitors] = useState<OutputMonitor[]>([]);
+  const [selectedMonitorIds, setSelectedMonitorIds] = useState<string[]>([]);
+  const [monitorError, setMonitorError] = useState<string | null>(null);
+  const [monitorBusy, setMonitorBusy] = useState(false);
+  const selectedMonitors = monitors.filter((monitor) => selectedMonitorIds.includes(monitor.id));
+
+  const refreshMonitors = useCallback(async () => {
+    setMonitorBusy(true);
+    setMonitorError(null);
+    try {
+      const next = await listOutputMonitors();
+      setMonitors(next);
+      setSelectedMonitorIds((current) => {
+        const availableIds = new Set(next.map((monitor) => monitor.id));
+        const preserved = current.filter((id) => availableIds.has(id));
+        return preserved.length ? preserved : next.slice(0, 1).map((monitor) => monitor.id);
+      });
+    } catch (e) {
+      console.error("Failed to list monitors:", e);
+      setMonitorError(e instanceof Error ? e.message : "Failed to list monitors.");
+    } finally {
+      setMonitorBusy(false);
+    }
+  }, []);
+
+  const setMonitorSelected = useCallback((monitorId: string, selected: boolean) => {
+    setSelectedMonitorIds((current) => {
+      if (selected) return current.includes(monitorId) ? current : [...current, monitorId];
+      return current.filter((id) => id !== monitorId);
+    });
+  }, []);
+
+  const assignOutputs = useCallback(async (fitToMonitor: boolean) => {
+    if (selectedMonitors.length === 0) return;
+    setMonitorBusy(true);
+    setMonitorError(null);
+    try {
+      await assignOutputsToMonitors(selectedMonitors, fitToMonitor, monitors);
+    } catch (e) {
+      console.error("Failed to move output window:", e);
+      setMonitorError(e instanceof Error ? e.message : "Failed to move output window.");
+    } finally {
+      setMonitorBusy(false);
+    }
+  }, [monitors, selectedMonitors]);
+
+  useEffect(() => {
+    refreshMonitors();
+  }, [refreshMonitors]);
+
   return (
     <aside className="feature-panel">
       <SectionTitle>Output</SectionTitle>
@@ -1361,6 +1443,40 @@ function OutputPanel({ busAScene, busBScene, crossfade, mix, isPlaying, outputDe
         ["Title bar", outputDecorated ? "Visible" : "Hidden"],
       ]} />
       <button className="button" onClick={onToggleOutputDecorations}>{outputDecorated ? "Hide Output Title Bar" : "Show Output Title Bar"}</button>
+      <div className="subpanel">
+        <ModuleHeader title="Display Targets" meta={`${selectedMonitors.length}/${monitors.length} selected`} />
+        <div className="output-monitor-list">
+          {monitors.length === 0 ? (
+            <p className="help">No monitors detected</p>
+          ) : (
+            monitors.map((monitor) => (
+              <label key={monitor.id} className="output-monitor-option">
+                <input
+                  type="checkbox"
+                  checked={selectedMonitorIds.includes(monitor.id)}
+                  disabled={monitorBusy}
+                  onChange={(e) => setMonitorSelected(monitor.id, e.target.checked)}
+                />
+                <span>
+                  <strong>{monitor.label}</strong>
+                  <small>{monitor.size.width} x {monitor.size.height} / scale {monitor.scaleFactor.toFixed(2)}x</small>
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+        <InfoGrid rows={[
+          ["Windows", selectedMonitors.length > 0 ? String(selectedMonitors.length) : "None"],
+          ["Mode", "Same program output on each display"],
+        ]} />
+        <div className="action-row output-monitor-actions">
+          <button className="button" onClick={refreshMonitors} disabled={monitorBusy}>Refresh</button>
+          <button className="button" onClick={() => setSelectedMonitorIds(monitors.map((monitor) => monitor.id))} disabled={monitorBusy || monitors.length === 0}>All</button>
+          <button className="button is-primary" onClick={() => assignOutputs(true)} disabled={monitorBusy || selectedMonitors.length === 0}>Fit Selected</button>
+        </div>
+        <button className="button" onClick={() => assignOutputs(false)} disabled={monitorBusy || selectedMonitors.length === 0}>Move Selected Without Resize</button>
+        {monitorError && <p className="help is-error">{monitorError}</p>}
+      </div>
     </aside>
   );
 }

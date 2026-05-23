@@ -18,6 +18,7 @@ interface UseEngineOptions {
   scenePreviewCanvasesRef?: React.RefObject<Map<string, HTMLCanvasElement | null>>;
   ledConfig?: LedConfig | null;
   ledPoints?: CalibrationPoint[];
+  enableLedOutput?: boolean;
 }
 
 interface RendererEntry {
@@ -76,7 +77,7 @@ function programSourceIds(busA: string | null, busB: string | null, selectedScen
 }
 
 export function useEngine(opts: UseEngineOptions) {
-  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints } = opts;
+  const { outputContainerRef, preview, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, ledConfig, ledPoints, enableLedOutput = true } = opts;
 
   const renderersRef = useRef<Map<string, RendererEntry>>(new Map());
   const loadingRenderersRef = useRef<Map<string, Promise<RendererEntry | null>>>(new Map());
@@ -105,6 +106,7 @@ export function useEngine(opts: UseEngineOptions) {
   const lastBpmRef = useRef(120);
   const syncVersionRef = useRef(0);
   const disposedRef = useRef(false);
+  const sharedClockOffsetRef = useRef<number | null>(null);
   const ledConfigRef = useRef(ledConfig);
   const ledPointsRef = useRef(ledPoints);
   ledConfigRef.current = ledConfig;
@@ -192,6 +194,9 @@ export function useEngine(opts: UseEngineOptions) {
 
     const unlistenState = listenVJState((state) => {
       stateRef.current = state;
+      if (state.clockTimeSeconds !== undefined && state.clockSentAtMs !== undefined) {
+        sharedClockOffsetRef.current = state.clockTimeSeconds + (Date.now() - state.clockSentAtMs) / 1000 - performance.now() / 1000;
+      }
       const previewIds = [...(scenePreviewCanvasesRef?.current.keys() ?? [])];
       const nextRendererStateKey = rendererStateKey(state, previewIds);
       if (nextRendererStateKey === rendererStateKeyRef.current) {
@@ -279,6 +284,9 @@ export function useEngine(opts: UseEngineOptions) {
     });
 
     const unlistenRuntime = listenVJRuntime((runtime) => {
+      if (runtime.clockTimeSeconds !== undefined && runtime.clockSentAtMs !== undefined) {
+        sharedClockOffsetRef.current = runtime.clockTimeSeconds + (Date.now() - runtime.clockSentAtMs) / 1000 - performance.now() / 1000;
+      }
       stateRef.current = {
         ...stateRef.current,
         crossfade: runtime.crossfade,
@@ -317,7 +325,7 @@ export function useEngine(opts: UseEngineOptions) {
       }
 
       const now = performance.now();
-      const time = (now - t0Ref.current) / 1000;
+      const time = sharedClockOffsetRef.current === null ? (now - t0Ref.current) / 1000 : now / 1000 + sharedClockOffsetRef.current;
       const dt = time - prevRef.current;
       prevRef.current = time;
 
@@ -398,7 +406,7 @@ export function useEngine(opts: UseEngineOptions) {
 
       }
 
-      if (!preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
+      if (enableLedOutput && !preview && compositorCanvasRef.current && ledConfigRef.current?.enabled && ledPointsRef.current && ledPointsRef.current.length > 0) {
         const now2 = performance.now();
         if (!ledSendInFlightRef.current && ledSendTimerRef.current === null && now2 - ledLastSendRef.current >= 33) {
           ledLastSendRef.current = now2;
@@ -447,7 +455,7 @@ export function useEngine(opts: UseEngineOptions) {
       compositorRef.current?.destroy();
       compositorCanvasRef.current?.remove();
     };
-  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef]);
+  }, [outputContainerRef, W, H, getOrCreate, busAPreviewRef, busBPreviewRef, selectedPreviewRef, selectedPreviewRefs, scenePreviewCanvasesRef, enableLedOutput]);
 
   return { sendCommand, getVideoInfo };
 }

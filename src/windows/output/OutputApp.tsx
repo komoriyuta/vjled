@@ -1,11 +1,21 @@
 import { useEffect, useRef } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useEngine } from "../../hooks/useEngine";
 import { useLedStore } from "../../stores/ledStore";
 import { listenLedState, requestLedState } from "../../events/vjEvents";
 import { ledInitSimple, ledLoadLayout } from "../../led/commands";
 
+function outputWindowLabel(): string {
+  try {
+    return getCurrentWebviewWindow().label;
+  } catch {
+    return "output";
+  }
+}
+
 export default function OutputApp() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const isPrimaryOutputRef = useRef(outputWindowLabel() === "output");
   const ledConfig = useLedStore((s) => s.config);
   const ledPoints = useLedStore((s) => s.calibrationPoints);
   const setConnected = useLedStore((s) => s.setConnected);
@@ -23,6 +33,7 @@ export default function OutputApp() {
   }, []);
 
   useEffect(() => {
+    if (!isPrimaryOutputRef.current) return;
     if (!ledConfig.enabled) return;
     let cancelled = false;
 
@@ -52,6 +63,7 @@ export default function OutputApp() {
     preview: false,
     ledConfig,
     ledPoints,
+    enableLedOutput: isPrimaryOutputRef.current,
   });
 
   return (
