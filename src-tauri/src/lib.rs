@@ -15,10 +15,9 @@ use std::sync::Mutex;
 use tauri::Manager;
 use tauri::State;
 
-// CEF ランタイムを使用。wry (WebKit) から Chromium ベースの CEF に切り替え。
-#[cfg(feature = "cef")]
+#[cfg(all(feature = "cef", target_os = "linux"))]
 type TauriRuntime = tauri::Cef;
-#[cfg(not(feature = "cef"))]
+#[cfg(not(all(feature = "cef", target_os = "linux")))]
 type TauriRuntime = tauri::Wry;
 
 #[derive(Debug, serde::Serialize)]
@@ -281,7 +280,7 @@ fn native_gpu_diagnostics() -> NativeGpuDiagnostics {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-#[cfg_attr(feature = "cef", tauri::cef_entry_point)]
+#[cfg_attr(all(feature = "cef", target_os = "linux"), tauri::cef_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::<TauriRuntime>::new();
 

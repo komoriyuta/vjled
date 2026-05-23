@@ -18,16 +18,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [features]
-default = ["cef"]
-cef = []
+default = []
+cef = ["tauri/cef"]
 
 [dependencies]
-tauri = { version = "2", default-features = false, features = [
-  "cef",
-  "protocol-asset",
-  "compression",
-  "dynamic-acl",
-] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -41,6 +35,22 @@ crossbeam = "0.8.4"
 tract-onnx = "0.21"
 ort = "2.0.0-rc.12"
 anyhow = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri = { version = "2", default-features = false, features = [
+  "cef",
+  "protocol-asset",
+  "compression",
+  "dynamic-acl",
+] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri = { version = "2", default-features = false, features = ["cef",
+  "wry",
+  "protocol-asset",
+  "compression",
+  "dynamic-acl",
+] }
 
 # CEF: tauri の feat/cef ブランチを使用して WebKit を Chromium に置き換える
 [patch.crates-io]

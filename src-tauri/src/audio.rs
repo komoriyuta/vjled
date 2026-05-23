@@ -13,10 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
 
-// CEF ランタイムに合わせた AppHandle 型エイリアス
-#[cfg(feature = "cef")]
+#[cfg(all(feature = "cef", target_os = "linux"))]
 type AppHandle = tauri::AppHandle<tauri::Cef>;
-#[cfg(not(feature = "cef"))]
+#[cfg(not(all(feature = "cef", target_os = "linux")))]
 type AppHandle = tauri::AppHandle<tauri::Wry>;
 
 const FFT_SIZE: usize = 1024;
