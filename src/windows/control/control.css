@@ -469,6 +469,53 @@ button { color: inherit; }
 .button.is-purple { background: var(--purple); border-color: var(--purple); color: white; }
 .button.is-danger { color: #ffb4ab; }
 .button.is-ghost { background: transparent; }
+.output-monitor-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.output-monitor-actions .button {
+  min-width: 0;
+  padding: 0 7px;
+}
+.output-monitor-list {
+  display: grid;
+  gap: 6px;
+}
+.output-monitor-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #0b0d0f;
+  padding: 8px;
+}
+.output-monitor-option input {
+  margin: 2px 0 0;
+  accent-color: var(--cyan);
+}
+.output-monitor-option span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.output-monitor-option strong,
+.output-monitor-option small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-monitor-option strong {
+  font-size: 11px;
+}
+.output-monitor-option small {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
 
 .field { display: grid; gap: 5px; }
 .field input, .field select, .field textarea, select {
@@ -594,6 +641,7 @@ button { color: inherit; }
   color: var(--muted);
 }
 .help { font-size: 11px; line-height: 1.45; margin: 0; }
+.help.is-error { color: #ffb4ab; }
 .empty-state {
   min-height: 100px;
   height: 100%;

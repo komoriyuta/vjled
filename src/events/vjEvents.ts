@@ -10,6 +10,8 @@ export interface VJStatePayload {
   isPlaying: boolean;
   selectedSceneId: string | null;
   audio: AudioAnalysis;
+  clockTimeSeconds?: number;
+  clockSentAtMs?: number;
 }
 
 export interface VideoCmdPayload {
@@ -32,6 +34,8 @@ export interface VJRuntimePayload {
   crossfade: number;
   mix: MixSettings;
   isPlaying: boolean;
+  clockTimeSeconds?: number;
+  clockSentAtMs?: number;
 }
 
 type Handler<T> = (payload: T) => void;

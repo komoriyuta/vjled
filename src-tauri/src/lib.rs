@@ -286,7 +286,7 @@ pub fn run() {
     let builder = tauri::Builder::<TauriRuntime>::new();
 
     #[cfg(all(feature = "cef", debug_assertions, target_os = "linux"))]
-    let builder = builder.command_line_args([("no-sandbox", None::<String>)]);
+    let builder = builder.command_line_args([("--no-sandbox", None::<String>)]);
 
     builder
         .plugin(tauri_plugin_opener::init())
