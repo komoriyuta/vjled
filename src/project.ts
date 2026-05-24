@@ -172,6 +172,7 @@ function parseLedConfig(value: unknown, fallback: LedConfig): LedConfig {
   const gain = Array.isArray(value.colorGain) ? value.colorGain : fallback.colorGain;
   return {
     enabled: Boolean(value.enabled),
+    sourceSceneId: typeof value.sourceSceneId === "string" ? value.sourceSceneId : null,
     brightness: clamp(value.brightness, 0, 1, fallback.brightness),
     colorGain: [
       clamp(gain[0], 0, 4, fallback.colorGain[0]),

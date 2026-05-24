@@ -1666,6 +1666,7 @@ function LedWorkspace() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mappingPreviewRef = useRef<HTMLDivElement>(null);
+  const scenes = useVJStore((s) => s.scenes);
   const config = useLedStore((s) => s.config);
   const connected = useLedStore((s) => s.connected);
   const layoutInfo = useLedStore((s) => s.layoutInfo);
@@ -1957,9 +1958,25 @@ function LedWorkspace() {
         ["Sender", connected ? "Ready" : "Not prepared"],
         ["Target", `${targetMode} ${config.broadcastIp}:${config.port}`],
         ["Pixels", String(layoutInfo?.total_pixels ?? config.pixelCount)],
+        ["Source", scenes.find((scene) => scene.id === config.sourceSceneId)?.name ?? "Program Output"],
         ["Video samples", String(calibrationPoints.length)],
       ]} />
       <div className="led-feature__grid">
+        <div className="subpanel">
+          <div className="eyebrow">Source</div>
+          <div className="field">
+            <label>LED Scene</label>
+            <select value={config.sourceSceneId ?? ""} onChange={(e) => setConfig({ sourceSceneId: e.target.value || null })}>
+              <option value="">Program Output</option>
+              {scenes.map((scene) => (
+                <option key={scene.id} value={scene.id} disabled={scene.renderPaused}>
+                  {scene.name} ({sceneTypeLabel(scene.type)}{scene.renderPaused ? ", paused" : ""})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="subpanel">
           <div className="eyebrow">Layout</div>
           <div className="led-layout-row">
