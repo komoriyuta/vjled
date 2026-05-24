@@ -1,6 +1,10 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+const GENERATE_MAX_TOKENS: u32 = 65536;
+const DECISION_MAX_TOKENS: u32 = 8192;
+const GENERATE_REPAIR_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -55,6 +59,10 @@ Rules:
 - Available uniforms: `iTime` (float, seconds), `iResolution` (vec2, canvas size), `iMouse` (vec4), `iFrame` (int).
 - Available audio uniforms: `iBpm`, `iBeat`, `iBeatPhase`, `iBeatCount`, `iFft[32]`.
 - Available helper: `float fftAt(float index)` for variable FFT access inside loops.
+- Audio meaning: `iBpm` is tempo, `iBeat` is 1.0 on beat frames and 0.0 otherwise, `iBeatPhase` is normalized 0.0-1.0 progress to the next beat, `iBeatCount` increments on beats, and `iFft`/`fftAt` are normalized spectrum energy where low bins are bass, middle bins are body, and high bins are treble.
+- Design like a professional live VJ: choose a clear visual concept, a restrained 3-5 color palette, readable silhouettes, strong negative space, and one dominant motion system instead of random unrelated effects.
+- Favor beat-synced moments: bass should drive scale/impact, mids should drive shape density or rotation, treble should drive fine detail, sparkle, scanlines, or edge highlights.
+- Build a complete looping stage visual: include background depth, foreground focus, and transition-friendly contrast so it mixes well with another scene.
 - Do NOT declare uniforms. The renderer already declares all uniforms and helpers.
 - Do NOT declare `precision`; the renderer already injects it.
 - Do NOT use `void main()` or `gl_FragCoord`.
@@ -79,6 +87,10 @@ Rules:
 - Use `function setup()` and `function draw()` as global functions.
 - Available globals: `createCanvas`, `background`, `fill`, `stroke`, `noStroke`, `noFill`, `ellipse`, `rect`, `line`, `triangle`, `beginShape`, `endShape`, `vertex`, `push`, `pop`, `translate`, `rotate`, `scale`, `colorMode`, `textAlign`, `textSize`, `text`, `noise`, `random`, `map`, `constrain`, `lerp`, `cos`, `sin`, `tan`, `abs`, `floor`, `ceil`, `min`, `max`, `pow`, `sqrt`, `millis`, `frameCount`, `width`, `height`, `mouseX`, `mouseY`, `windowWidth`, `windowHeight`, `windowResized`.
 - Available audio globals: `audio`, `bpm`, `beat`, `beatPhase`, `beatCount`, `fft`.
+- Audio meaning: `bpm` is tempo, `beat` is true on beat frames, `beatPhase` is normalized 0.0-1.0 progress to the next beat, `beatCount` increments on beats, and `fft` has normalized spectrum energy where low indices are bass, middle indices are body, and high indices are treble.
+- Design like a professional live VJ: pick a clear graphic system, a restrained 3-5 color palette, strong contrast, stable composition, and rhythmic variation that reads from a distance.
+- Favor p5 strengths: vector shapes, particles, poster-like geometry, typographic marks, trails, grids, and hand-drawn motion. Avoid trying to mimic complex 3D.
+- Use beat and FFT intentionally: bass controls pulse/scale, mids control density/path changes, treble controls small accents, strokes, flicker, and sparkle.
 - Must define both `function setup()` and `function draw()`.
 - Do NOT use `new p5()` or instance mode syntax.
 - Do NOT include HTML or createCanvas's third argument unless needed (WEBGL).
@@ -98,6 +110,10 @@ Rules:
 - Define `function update(state, time, dt, audio)` that animates the scene each frame.
 - Available globals: `THREE` (the Three.js namespace).
 - Audio includes: `audio.bpm`, `audio.beat`, `audio.beatPhase`, `audio.beatCount`, `audio.fft`, `audio.genre`.
+- Audio meaning: `audio.bpm` is tempo, `audio.beat` is true on beat frames, `audio.beatPhase` is normalized 0.0-1.0 progress to the next beat, `audio.beatCount` increments on beats, and `audio.fft` has normalized spectrum energy where low indices are bass, middle indices are body, and high indices are treble.
+- Design like a professional live VJ: create a clear spatial concept, a restrained 3-5 color palette, readable silhouettes, camera movement with purpose, and lighting that gives depth without visual clutter.
+- Favor Three.js strengths: instanced-looking repeated forms, tunnels, sculptures, orbiting rigs, stage-like depth, parallax, and camera choreography. Avoid flat 2D-only compositions.
+- Use audio intentionally: bass controls large scale/camera impact, mids control object motion or formation changes, treble controls emissive highlights, small parts, and shimmer.
 - In setup: configure camera position, add objects to scene, return state with references.
 - In update: use `time` (seconds) and `dt` (delta seconds) for animation.
 - Do NOT import anything. Do NOT create renderer or DOM elements.
@@ -165,45 +181,68 @@ pub async fn generate_code(
         content: user_prompt.to_string(),
     });
 
-    let body = ChatRequest {
-        model: model.to_string(),
-        messages,
-        temperature: 0.8,
-        max_tokens: Some(32768),
-        response_format: Some(ResponseFormat {
-            kind: "json_object".to_string(),
-        }),
-    };
+    let mut last_error = String::new();
+    for attempt in 0..GENERATE_REPAIR_ATTEMPTS {
+        let body = ChatRequest {
+            model: model.to_string(),
+            messages: messages.clone(),
+            temperature: if attempt == 0 { 0.8 } else { 0.35 },
+            max_tokens: Some(GENERATE_MAX_TOKENS),
+            response_format: Some(ResponseFormat {
+                kind: "json_object".to_string(),
+            }),
+        };
 
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        let chat_resp = match post_chat_request(&client, &url, api_key, &body).await {
+            Ok(response) => response,
+            Err(error) if token_limit_error(&error) && GENERATE_MAX_TOKENS > 32768 => {
+                let fallback_body = ChatRequest {
+                    model: model.to_string(),
+                    messages: messages.clone(),
+                    temperature: if attempt == 0 { 0.8 } else { 0.35 },
+                    max_tokens: Some(32768),
+                    response_format: Some(ResponseFormat {
+                        kind: "json_object".to_string(),
+                    }),
+                };
+                post_chat_request(&client, &url, api_key, &fallback_body).await?
+            }
+            Err(error) => return Err(error),
+        };
+        let choice = chat_resp.choices.first().ok_or("No response from API")?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("API error ({}): {}", status, text));
+        let result = if choice.finish_reason.as_deref() == Some("length") {
+            Err(
+                "AI response was truncated before a complete JSON/code result was returned"
+                    .to_string(),
+            )
+        } else {
+            parse_generated_code_json(scene_type, &choice.message.content)
+        };
+
+        match result {
+            Ok(code) => return Ok(code),
+            Err(error) => {
+                last_error = error;
+                if attempt + 1 >= GENERATE_REPAIR_ATTEMPTS {
+                    break;
+                }
+                messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: choice.message.content.chars().take(12_000).collect(),
+                });
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: build_repair_prompt(scene_type, &last_error),
+                });
+            }
+        }
     }
 
-    let chat_resp: ChatResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let choice = chat_resp.choices.first().ok_or("No response from API")?;
-
-    if choice.finish_reason.as_deref() == Some("length") {
-        return Err(
-            "AI response was truncated before a complete JSON/code result was returned".to_string(),
-        );
-    }
-
-    parse_generated_code_json(scene_type, &choice.message.content)
+    Err(format!(
+        "AI failed to produce valid runnable {} code after {} attempts: {}",
+        scene_type, GENERATE_REPAIR_ATTEMPTS, last_error
+    ))
 }
 
 pub async fn decide_auto_vj(
@@ -248,17 +287,34 @@ Rules:
         model: model.to_string(),
         messages,
         temperature: 0.2,
-        max_tokens: Some(8192),
+        max_tokens: Some(DECISION_MAX_TOKENS),
         response_format: Some(ResponseFormat {
             kind: "json_object".to_string(),
         }),
     };
 
+    let chat_resp = post_chat_request(&client, &url, api_key, &body).await?;
+
+    let content = chat_resp
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or("No response from API")?;
+
+    Ok(clean_code_fences(&content))
+}
+
+async fn post_chat_request(
+    client: &Client,
+    url: &str,
+    api_key: &str,
+    body: &ChatRequest,
+) -> Result<ChatResponse, String> {
     let response = client
-        .post(&url)
+        .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -269,18 +325,25 @@ Rules:
         return Err(format!("API error ({}): {}", status, text));
     }
 
-    let chat_resp: ChatResponse = response
+    response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Failed to parse response: {}", e))
+}
 
-    let content = chat_resp
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .ok_or("No response from API")?;
+fn build_repair_prompt(scene_type: &str, error: &str) -> String {
+    format!(
+        "The previous {} code failed validation: {}\nReturn a complete replacement now. Output ONLY valid JSON with shape {{\"code\":\"...\",\"complete\":true}}. Do not explain. Do not use markdown fences. Keep to the renderer contract and avoid unsupported APIs.",
+        scene_type, error
+    )
+}
 
-    Ok(clean_code_fences(&content))
+fn token_limit_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("max_tokens")
+        || lower.contains("max completion")
+        || lower.contains("maximum context")
+        || lower.contains("too many tokens")
 }
 
 fn parse_generated_code_json(scene_type: &str, content: &str) -> Result<String, String> {
@@ -297,6 +360,7 @@ fn parse_generated_code_json(scene_type: &str, content: &str) -> Result<String, 
     if code.contains("```") {
         return Err("AI returned markdown fences inside the code field".to_string());
     }
+    validate_balanced_source(code)?;
     validate_generated_code(scene_type, code)?;
     Ok(code.to_string())
 }
@@ -322,6 +386,13 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
             {
                 return Err("AI returned GLSL with dynamic iFft indexing; use fftAt(float) for variable FFT access".to_string());
             }
+            if code.contains("texture(")
+                || code.contains("sampler2D")
+                || code.contains("#version")
+                || code.contains("layout(")
+            {
+                return Err("AI returned GLSL outside the WebGL 1 renderer contract".to_string());
+            }
         }
         "p5" => {
             if !code.contains("function setup(") || !code.contains("function draw(") {
@@ -334,6 +405,10 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
                 || code.contains("window.")
                 || code.contains("<script")
                 || code.contains("<canvas")
+                || code.contains("loadImage(")
+                || code.contains("loadSound(")
+                || code.contains("fetch(")
+                || code.contains("await ")
             {
                 return Err(
                     "AI returned p5 code outside the supported sandbox contract".to_string()
@@ -354,8 +429,13 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
                 || code.contains("document.")
                 || code.contains("window.")
                 || code.contains("fetch(")
+                || code.contains("await ")
+                || code.contains("async ")
                 || code.contains("TextureLoader")
                 || code.contains("GLTFLoader")
+                || code.contains("OBJLoader")
+                || code.contains("FontLoader")
+                || code.contains("AudioLoader")
                 || code.contains("new THREE.WebGLRenderer")
             {
                 return Err(
@@ -364,6 +444,85 @@ fn validate_generated_code(scene_type: &str, code: &str) -> Result<(), String> {
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_balanced_source(code: &str) -> Result<(), String> {
+    let mut stack: Vec<char> = Vec::new();
+    let mut chars = code.chars().peekable();
+    let mut string_quote: Option<char> = None;
+    let mut escaped = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+
+    while let Some(ch) = chars.next() {
+        if line_comment {
+            if ch == '\n' {
+                line_comment = false;
+            }
+            continue;
+        }
+        if block_comment {
+            if ch == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                block_comment = false;
+            }
+            continue;
+        }
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            line_comment = true;
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            block_comment = true;
+            continue;
+        }
+        if ch == '"' || ch == '\'' || ch == '`' {
+            string_quote = Some(ch);
+            continue;
+        }
+        match ch {
+            '(' | '[' | '{' => stack.push(ch),
+            ')' => {
+                if stack.pop() != Some('(') {
+                    return Err("AI returned code with unbalanced parentheses".to_string());
+                }
+            }
+            ']' => {
+                if stack.pop() != Some('[') {
+                    return Err("AI returned code with unbalanced brackets".to_string());
+                }
+            }
+            '}' => {
+                if stack.pop() != Some('{') {
+                    return Err("AI returned code with unbalanced braces".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if string_quote.is_some() {
+        return Err("AI returned code with an unterminated string".to_string());
+    }
+    if block_comment {
+        return Err("AI returned code with an unterminated block comment".to_string());
+    }
+    if !stack.is_empty() {
+        return Err("AI returned code with unclosed delimiters".to_string());
     }
     Ok(())
 }

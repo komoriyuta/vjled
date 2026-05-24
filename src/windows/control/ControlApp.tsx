@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAiStore } from "../../stores/aiStore";
 import { useLedStore } from "../../stores/ledStore";
 import { emptyAudioAnalysis, useVJStore } from "../../stores/vjStore";
+import { createRenderer } from "../../renderers";
 import { emitLedState, emitVJAudio, emitVJRuntime, emitVJState, listenLedState, listenLedStateRequest, listenVJStateRequest } from "../../events/vjEvents";
 import {
   calibrationDetectLed,
@@ -133,13 +134,16 @@ interface AudioSummary {
 const defaultAutoVJ: AutoVJSettings = {
   enabled: false,
   sceneType: "auto",
-  intervalBars: 4,
-  decisionSeconds: 20,
-  minSceneSeconds: 45,
-  generateCooldownSeconds: 90,
+  intervalBars: 16,
+  decisionSeconds: 30,
+  minSceneSeconds: 30,
+  generateCooldownSeconds: 30,
   transitionSeconds: 4,
-  maxScenes: 12,
+  maxScenes: 9,
 };
+
+const maxActiveRenderedScenes = 4;
+const sceneTypeRotation: GenerativeSceneType[] = ["glsl", "threejs", "p5"];
 
 const mixLabels: Record<MixMode, string> = {
   crossfade: "Crossfade",
@@ -164,8 +168,8 @@ const mixLabels: Record<MixMode, string> = {
   rgbSplit: "RGB Split",
 };
 
-const blendModes: MixMode[] = ["crossfade", "additive", "screen", "multiply", "overlay", "softLight", "difference", "lighten", "darken"];
-const transitionModes: MixMode[] = ["wipeLeft", "wipeRight", "wipeUp", "wipeDown", "circle", "diamond", "dissolve", "luma", "ripple", "glitch", "rgbSplit"];
+const blendModes: MixMode[] = ["crossfade", "additive", "screen", "overlay"];
+const transitionModes: MixMode[] = ["glitch", "rgbSplit", "luma"];
 
 const defaultSceneKey: SceneKeySettings = {
   enabled: false,
@@ -377,7 +381,7 @@ export default function ControlApp() {
   const handleAiGenerate = useCallback(
     async (sceneType: SceneType, prompt: string) => {
       try {
-        const code = await aiGenerate(sceneType, addGenreHint(prompt, audio));
+        const code = await generateVisuallyValidCode(aiGenerate, sceneType, addGenreHint(prompt, audio), undefined, audio);
         addScene(sceneType);
         const currentScenes = useVJStore.getState().scenes;
         const nextScene = currentScenes[currentScenes.length - 1];
@@ -394,7 +398,7 @@ export default function ControlApp() {
     async (prompt: string) => {
       if (!selectedScene) return;
       try {
-        const code = await aiGenerate(selectedScene.type, addGenreHint(prompt, audio), selectedScene.code);
+        const code = await generateVisuallyValidCode(aiGenerate, selectedScene.type, addGenreHint(prompt, audio), selectedScene.code, audio);
         updateSceneCode(selectedScene.id, code);
       } catch {}
     },
@@ -470,6 +474,23 @@ export default function ControlApp() {
           };
           appendAutoLog("GUARD", `non-json fallback to GENERATE; sceneAge=${formatAge(sceneAgeSeconds)} genCooldown=${formatAge(generateCooldownSeconds)}`);
         }
+        if (decision.action === "KEEP" && canGenerateNow) {
+          decision = {
+            ...decision,
+            action: "GENERATE",
+            confidence: Math.max(decision.confidence, 0.62),
+            reason: `refresh bias: ${decision.reason}`,
+            visualDirection: decision.visualDirection || `Make a visibly new ${mood.label} look using ${formatTagList(summary.topTags)}`,
+          };
+          appendAutoLog("GUARD", `KEEP upgraded to GENERATE; sceneAge=${formatAge(sceneAgeSeconds)} genCooldown=${formatAge(generateCooldownSeconds)}`);
+        } else if (decision.action === "KEEP" && sceneAgeSeconds >= autoVJ.minSceneSeconds) {
+          decision = {
+            ...decision,
+            action: "ACCENT",
+            reason: `refresh accent bias: ${decision.reason}`,
+          };
+          appendAutoLog("GUARD", `KEEP upgraded to ACCENT; sceneAge=${formatAge(sceneAgeSeconds)}`);
+        }
 
         if (decision.action === "KEEP") {
           appendAutoLog("KEEP", decision.reason);
@@ -541,16 +562,17 @@ export default function ControlApp() {
           }
         }
 
-        const type = pickAutoSceneType(autoVJ.sceneType, mood);
+        const beforeGenerate = useVJStore.getState();
+        const type = pickAutoSceneType(autoVJ.sceneType, mood, beforeGenerate.scenes);
         const mode = pickAutoMixMode(mood);
         const generatePrompt = buildAutoPrompt({
           mood,
-          audio: useVJStore.getState().audio,
+          audio: beforeGenerate.audio,
           reason: `${reason}: ${decision.visualDirection || decision.reason}`,
           sceneType: type,
-          currentScenes: useVJStore.getState().scenes,
+          currentScenes: beforeGenerate.scenes,
         });
-        const code = await aiGenerate(type, generatePrompt);
+        const code = await generateVisuallyValidCode(aiGenerate, type, generatePrompt, undefined, beforeGenerate.audio);
         appendAutoLog("GENERATE", `code generated; type=${type}; direction=${decision.visualDirection || decision.reason}`);
 
         addScene(type);
@@ -576,6 +598,7 @@ export default function ControlApp() {
         autoLastGenerateAtRef.current = now;
 
         const after = useVJStore.getState();
+        enforceRenderBudget(after.scenes, after.busA, after.busB, after.selectedSceneId, new Set([generated.id]), setSceneRenderPaused);
         const extraScenes = after.scenes.filter((scene) => scene.name.startsWith("AI "));
         if (extraScenes.length > autoVJ.maxScenes) {
           const protectedIds = new Set([after.busA, after.busB, generated.id]);
@@ -601,7 +624,7 @@ export default function ControlApp() {
         autoBusyRef.current = false;
       }
     },
-    [addScene, aiConfig.apiKey, aiDecideAutoVJ, aiGenerate, appendAutoLog, autoVJ, fadeToA, fadeToB, removeScene, renameScene, selectScene, setBusA, setBusB, setMixSettings, updateSceneCode],
+    [addScene, aiConfig.apiKey, aiDecideAutoVJ, aiGenerate, appendAutoLog, autoVJ, fadeToA, fadeToB, removeScene, renameScene, selectScene, setBusA, setBusB, setMixSettings, setSceneRenderPaused, updateSceneCode],
   );
 
   useEffect(() => {
@@ -705,6 +728,10 @@ export default function ControlApp() {
       autoPrimedRef.current = false;
     }
   }, [autoVJ.enabled]);
+
+  useEffect(() => {
+    enforceRenderBudget(scenes, busA, busB, selectedSceneId, new Set(), setSceneRenderPaused);
+  }, [busA, busB, scenes, selectedSceneId, setSceneRenderPaused]);
 
   useEffect(() => {
     let closing = false;
@@ -2388,8 +2415,156 @@ function formatAge(seconds: number): string {
   return `${seconds.toFixed(0)}s`;
 }
 
+async function generateVisuallyValidCode(
+  generate: (sceneType: string, prompt: string, existingCode?: string) => Promise<string>,
+  sceneType: SceneType,
+  prompt: string,
+  existingCode: string | undefined,
+  audio: AudioAnalysis,
+): Promise<string> {
+  if (sceneType === "video") {
+    return generate(sceneType, prompt, existingCode);
+  }
+
+  let repairCode = existingCode;
+  let repairPrompt = prompt;
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const code = await generate(sceneType, repairPrompt, repairCode);
+    const result = await validateRenderedCode(sceneType, code, audio);
+    if (result.ok) return code;
+
+    lastError = result.reason;
+    console.warn(`[AI visual validation] ${sceneType} attempt ${attempt + 1} failed: ${lastError}`);
+    repairCode = code;
+    repairPrompt = [
+      prompt,
+      "",
+      `The previous ${sceneType} code rendered incorrectly: ${lastError}.`,
+      "Regenerate a complete replacement that visibly renders within the first second.",
+      "It must not be nearly all black, nearly all white, transparent, or static.",
+      "Use a dark/stage background with bright colored foreground shapes, and make motion obvious even if audio is quiet.",
+    ].join("\n");
+  }
+
+  throw new Error(`AI visual validation failed after 3 attempts: ${lastError}`);
+}
+
+async function validateRenderedCode(sceneType: SceneType, code: string, audio: AudioAnalysis): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const renderer = await createRenderer(sceneType);
+  if (!renderer) return { ok: false, reason: "renderer could not be created" };
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 180;
+  const validationAudio = audio.enabled
+    ? audio
+    : {
+        ...emptyAudioAnalysis,
+        enabled: true,
+        permission: "ready" as const,
+        bpm: 124,
+        beat: true,
+        beatPhase: 0,
+        beatCount: 1,
+        fft: Array.from({ length: 32 }, (_, i) => (i < 6 ? 0.72 : i < 18 ? 0.42 : 0.3)),
+      };
+
+  try {
+    renderer.init(canvas);
+    renderer.setCode(code);
+    const frames: ImageData[] = [];
+    for (let i = 0; i < 8; i++) {
+      const beat = i === 0 || i === 4;
+      renderer.update(i / 12, 1 / 12, {
+        ...validationAudio,
+        beat,
+        beatPhase: (i % 4) / 4,
+        beatCount: validationAudio.beatCount + (beat ? i : 0),
+      });
+      await nextFrame();
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return { ok: false, reason: "validation canvas could not be read" };
+      frames.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    }
+    return analyzeRenderedFrames(frames);
+  } catch (error) {
+    return { ok: false, reason: `renderer threw during validation: ${String(error)}` };
+  } finally {
+    renderer.destroy();
+    canvas.remove();
+  }
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function analyzeRenderedFrames(frames: ImageData[]): { ok: true } | { ok: false; reason: string } {
+  if (frames.length === 0) return { ok: false, reason: "no frames rendered" };
+
+  let lumaSum = 0;
+  let lumaSqSum = 0;
+  let colorSpreadSum = 0;
+  let alphaSum = 0;
+  let samples = 0;
+  const stride = Math.max(4, Math.floor(frames[0].data.length / 4 / 6000) * 4);
+
+  for (const frame of frames) {
+    for (let i = 0; i < frame.data.length; i += stride) {
+      const r = frame.data[i];
+      const g = frame.data[i + 1];
+      const b = frame.data[i + 2];
+      const a = frame.data[i + 3];
+      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      lumaSum += luma;
+      lumaSqSum += luma * luma;
+      colorSpreadSum += Math.max(r, g, b) - Math.min(r, g, b);
+      alphaSum += a;
+      samples++;
+    }
+  }
+
+  const mean = lumaSum / Math.max(1, samples);
+  const variance = lumaSqSum / Math.max(1, samples) - mean * mean;
+  const contrast = Math.sqrt(Math.max(0, variance));
+  const colorSpread = colorSpreadSum / Math.max(1, samples);
+  const alpha = alphaSum / Math.max(1, samples);
+  const motion = averageFrameDelta(frames, stride);
+
+  if (alpha < 8) return { ok: false, reason: `nearly transparent output (alpha ${alpha.toFixed(1)})` };
+  if (mean < 4 && contrast < 5) return { ok: false, reason: `nearly black output (luma ${mean.toFixed(1)}, contrast ${contrast.toFixed(1)})` };
+  if (mean > 248 && contrast < 5) return { ok: false, reason: `nearly white output (luma ${mean.toFixed(1)}, contrast ${contrast.toFixed(1)})` };
+  if (contrast < 3 && colorSpread < 3) return { ok: false, reason: `flat solid output (contrast ${contrast.toFixed(1)}, color ${colorSpread.toFixed(1)})` };
+  if (motion < 0.35) return { ok: false, reason: `static output (frame delta ${motion.toFixed(2)})` };
+  return { ok: true };
+}
+
+function averageFrameDelta(frames: ImageData[], stride: number): number {
+  if (frames.length < 2) return 0;
+  let total = 0;
+  let pairs = 0;
+  for (let f = 1; f < frames.length; f++) {
+    const prev = frames[f - 1].data;
+    const next = frames[f].data;
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < next.length; i += stride) {
+      sum += (
+        Math.abs(next[i] - prev[i])
+        + Math.abs(next[i + 1] - prev[i + 1])
+        + Math.abs(next[i + 2] - prev[i + 2])
+      ) / 3;
+      count++;
+    }
+    total += sum / Math.max(1, count);
+    pairs++;
+  }
+  return total / Math.max(1, pairs);
+}
+
 function shouldAutoGenerate(sceneAgeSeconds: number, generateCooldownSeconds: number, settings: AutoVJSettings): boolean {
-  const staleSceneSeconds = Math.max(settings.minSceneSeconds * 2, 120);
+  const staleSceneSeconds = Math.max(settings.minSceneSeconds * 1.2, 30);
   return sceneAgeSeconds >= staleSceneSeconds && generateCooldownSeconds >= settings.generateCooldownSeconds;
 }
 
@@ -2426,7 +2601,11 @@ function normalizeAutoVJDecision(
     normalized = Math.abs(summary.energyDelta) > 0.14 ? "SWITCH" : "ACCENT";
     reason = `generation cooldown: ${reason}`;
   }
-  if (confidence < 0.35 && normalized !== "KEEP") {
+  if (normalized === "KEEP" && sceneAgeSeconds >= settings.minSceneSeconds && Math.abs(summary.energyDelta) > 0.04) {
+    normalized = "ACCENT";
+    reason = `refresh bias: ${reason}`;
+  }
+  if (confidence < 0.25 && normalized !== "KEEP") {
     normalized = Math.abs(summary.energyDelta) > 0.16 ? "ACCENT" : "KEEP";
     reason = `low confidence: ${reason}`;
   }
@@ -2582,29 +2761,43 @@ function analyzeAudioMood(audio: AudioAnalysis): AudioMood {
   };
 }
 
-function pickAutoSceneType(setting: AutoSceneType, mood: AudioMood): GenerativeSceneType {
+function pickAutoSceneType(setting: AutoSceneType, mood: AudioMood, currentScenes: Scene[] = []): GenerativeSceneType {
   if (setting !== "auto") return setting;
   const label = mood.label.toLowerCase();
-  if (label.includes("relaxed") || label.includes("ambient") || label.includes("chill") || label.includes("acoustic") || label.includes("jazz")) return "threejs";
-  if (label.includes("happy") || label.includes("pop") || label.includes("vocal") || label.includes("funk") || label.includes("hip-hop") || label.includes("indie")) return "p5";
-  if (label.includes("danceable") || label.includes("aggressive") || label.includes("metal") || label.includes("rock") || label.includes("electro") || label.includes("house")) return "glsl";
-  return mood.treble > mood.bass ? "p5" : "glsl";
+  let preferred: GenerativeSceneType = mood.treble > mood.bass ? "p5" : "glsl";
+  if (label.includes("relaxed") || label.includes("ambient") || label.includes("chill") || label.includes("acoustic") || label.includes("jazz")) preferred = "threejs";
+  if (label.includes("happy") || label.includes("pop") || label.includes("vocal") || label.includes("funk") || label.includes("hip-hop") || label.includes("indie")) preferred = "p5";
+  if (label.includes("danceable") || label.includes("aggressive") || label.includes("metal") || label.includes("rock") || label.includes("electro") || label.includes("house")) preferred = "glsl";
+
+  const recent = currentScenes.filter((scene) => scene.type !== "video").slice(-6);
+  const recentAuto = currentScenes.filter((scene) => scene.name.startsWith("AI ") && scene.type !== "video").slice(-3);
+  const unused = sceneTypeRotation.find((type) => !recentAuto.some((scene) => scene.type === type));
+  if (unused) return unused;
+
+  return sceneTypeRotation
+    .map((type) => ({
+      type,
+      score: (type === preferred ? -1.4 : 0)
+        + recent.filter((scene) => scene.type === type).length * 0.8
+        + recentAuto.filter((scene) => scene.type === type).length * 1.2,
+    }))
+    .sort((a, b) => a.score - b.score)[0]?.type ?? preferred;
 }
 
 function pickAutoMixMode(mood: AudioMood): MixMode {
   const label = mood.label.toLowerCase();
   if (label.includes("danceable")) return mood.treble > 0.5 ? "rgbSplit" : "glitch";
-  if (label.includes("aggressive")) return "luma";
-  if (label.includes("relaxed")) return "softLight";
+  if (label.includes("aggressive")) return "glitch";
+  if (label.includes("relaxed")) return "screen";
   if (label.includes("happy")) return "overlay";
   if (label.includes("sad")) return "screen";
   if (label.includes("electro") || label.includes("house")) return mood.treble > 0.5 ? "rgbSplit" : "glitch";
-  if (label.includes("metal") || label.includes("rock")) return "luma";
-  if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic")) return "softLight";
+  if (label.includes("metal") || label.includes("rock")) return "glitch";
+  if (label.includes("ambient") || label.includes("chill") || label.includes("acoustic")) return "screen";
   if (label.includes("pop") || label.includes("vocal")) return "overlay";
-  if (label.includes("hip-hop") || label.includes("funk") || label.includes("soul")) return "circle";
+  if (label.includes("hip-hop") || label.includes("funk") || label.includes("soul")) return "rgbSplit";
   if (label.includes("jazz") || label.includes("vintage")) return "screen";
-  return mood.bass > mood.treble ? "circle" : "dissolve";
+  return mood.bass > mood.treble ? "glitch" : "rgbSplit";
 }
 
 function pickAutoSwitchScene(targetSceneId: string | undefined, scenes: Scene[], busA: string | null, busB: string | null, mood: AudioMood): Scene | null {
@@ -2613,7 +2806,7 @@ function pickAutoSwitchScene(targetSceneId: string | undefined, scenes: Scene[],
     const target = scenes.find((scene) => scene.id === targetSceneId && !liveIds.has(scene.id) && !scene.renderPaused);
     if (target && target.type !== "video") return target;
   }
-  const preferredType = pickAutoSceneType("auto", mood);
+  const preferredType = pickAutoSceneType("auto", mood, scenes);
   const available = scenes
     .filter((scene) => !liveIds.has(scene.id) && !scene.renderPaused && scene.type !== "video")
     .sort((a, b) => sceneRecencyScore(b) - sceneRecencyScore(a));
@@ -2622,6 +2815,30 @@ function pickAutoSwitchScene(targetSceneId: string | undefined, scenes: Scene[],
     ?? available.find((scene) => scene.name.startsWith("AI "))
     ?? available[0]
     ?? null;
+}
+
+function enforceRenderBudget(
+  scenes: Scene[],
+  busA: string | null,
+  busB: string | null,
+  selectedSceneId: string | null,
+  extraProtectedIds: Set<string>,
+  setSceneRenderPaused: (id: string, paused: boolean) => void,
+) {
+  const protectedIds = new Set([busA, busB, selectedSceneId, ...extraProtectedIds].filter(Boolean) as string[]);
+  const active = scenes.filter((scene) => !scene.renderPaused && scene.type !== "video");
+  if (active.length <= maxActiveRenderedScenes) return;
+
+  const candidates = active
+    .filter((scene) => !protectedIds.has(scene.id))
+    .sort((a, b) => {
+      const aiDelta = Number(!a.name.startsWith("AI ")) - Number(!b.name.startsWith("AI "));
+      return aiDelta || sceneRecencyScore(a) - sceneRecencyScore(b);
+    });
+  const pauseCount = active.length - maxActiveRenderedScenes;
+  for (const scene of candidates.slice(0, pauseCount)) {
+    setSceneRenderPaused(scene.id, true);
+  }
 }
 
 function sceneRecencyScore(scene: Scene): number {
@@ -2663,8 +2880,9 @@ function buildAutoDecisionPrompt(args: {
     "Scenes:",
     sceneLines,
     "Choose KEEP, ACCENT, SWITCH, or GENERATE. SWITCH must include targetSceneId when possible.",
+    "Bias toward visible change: prefer ACCENT, SWITCH, or GENERATE unless the current look is clearly still working.",
     "For SWITCH, prefer newer non-paused AI scenes over older scenes, unless the older scene is clearly a better match.",
-    "If the current scene is old, generation cooldown has elapsed, and there is no clearly available non-paused scene to switch to, choose GENERATE.",
+    "If the current scene is old or the music has changed and generation cooldown has elapsed, choose GENERATE.",
     "Return only strict JSON. Never return plain text.",
   ].join("\n");
 }
@@ -2681,18 +2899,39 @@ function buildAutoPrompt(args: {
     .slice(-4)
     .map((scene) => `${scene.name} (${scene.type})`)
     .join(", ") || "none";
+  const colorSchemes = [
+    "Laser Club: black base, laser cyan, acid green, hot pink, hard white",
+    "Molten Impact: near-black, deep red, sodium amber, steel blue, white hits",
+    "Chrome Pop: graphite, aqua, saturated pink, warm yellow, violet accents",
+    "Nocturne Flow: deep indigo, teal, silver, soft violet, muted green",
+    "Analog Warmth: smoky gray, amber, ivory, wine red, muted teal",
+    "Digital Warning: black, electric blue, toxic lime, safety orange, white",
+  ].join(" | ");
 
   return [
     "Create a new live VJ scene for the currently playing music.",
+    "Think like a professional VJ designer preparing a stage visual, not a demo sketch.",
+    "Start from a single strong concept with a clear foreground, background depth, and transition-friendly contrast.",
     `Trigger reason: ${args.reason}.`,
     `Detected mood: ${args.mood.label}.`,
     `Essentia mood scores: ${formatMoodPredictions(args.audio.moodPredictions)}.`,
     `Detected genre: ${args.audio.genre}.`,
     `Detected music tags: ${args.audio.musicTags.length ? args.audio.musicTags.map((tag) => `${tag.label} ${(tag.confidence * 100).toFixed(0)}%`).join(", ") : "unknown"}.`,
     `Audio features from the existing Aubio pipeline: BPM ${args.audio.bpm.toFixed(1)}, energy ${args.mood.energy.toFixed(2)}, bass ${args.mood.bass.toFixed(2)}, mid ${args.mood.mid.toFixed(2)}, treble ${args.mood.treble.toFixed(2)}.`,
+    "Audio variable guide: BPM is tempo; beat is true/1.0 only on beat frames; beatPhase is 0.0-1.0 progress between beats; beatCount increments each beat; FFT low bins are bass, middle bins are body/mids, high bins are treble.",
+    args.sceneType === "glsl"
+      ? "Scene type role: GLSL is for fast abstract club visuals, shader fields, audio-reactive geometry, strobes, tunnels, grids, and clean WebGL 1 syntax."
+      : args.sceneType === "threejs"
+        ? "Scene type role: Three.js is for spatial visuals, real 3D objects, camera motion, depth, lighting, repeated structures, and audio-reactive transforms."
+        : "Scene type role: p5 is for graphic 2D visuals, particles, typography-like marks, poster shapes, vector rhythm, trails, and bold flat color systems.",
+    `Prepared color schemes to choose from or adapt: ${colorSchemes}.`,
     `Visual palette: ${args.mood.palette}.`,
     `Motion: ${args.mood.motion}.`,
     `Texture: ${args.mood.texture}.`,
+    "Color direction: choose one palette, keep most of the frame on 2-3 dominant colors, reserve the brightest color for beat accents, and avoid muddy full-spectrum rainbows.",
+    "Composition direction: make the image readable on a dark stage and on LEDs; avoid tiny details as the main subject; use large masses, clear rhythm, and high contrast.",
+    "Motion direction: make bass affect large scale/impact, mids affect shape density or formation changes, and treble affect small highlights, lines, particles, or shimmer.",
+    "Variation direction: include slow evolution over 16 bars plus beat-level accents; avoid random flicker that has no relation to the audio.",
     `Avoid repeating recent generated scenes: ${recentAiScenes}.`,
     "Make the scene responsive to the provided audio variables where available.",
     "Keep it performant for real-time preview and LED output.",
