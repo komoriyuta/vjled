@@ -21,6 +21,7 @@ import { rgbaFromCanvas } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
 import { useEngine } from "../../hooks/useEngine";
 import { createProjectData, parseProjectData } from "../../project";
+import { validateSceneVisual } from "../../renderers/visualValidation";
 import type { AudioAnalysis, BusLabel, MixMode, MixSettings, Scene, SceneKeySettings, SceneType, VideoSync } from "../../types";
 import {
   chooseProjectLoadPath,
@@ -51,6 +52,10 @@ type Workspace = "perform" | "project" | "output" | "audio" | "ai" | "led";
 
 type GenerativeSceneType = Exclude<SceneType, "video">;
 type AutoSceneType = GenerativeSceneType | "auto";
+
+function isGenerativeSceneType(type: SceneType): type is GenerativeSceneType {
+  return type !== "video";
+}
 
 interface AutoVJSettings {
   enabled: boolean;
@@ -284,6 +289,7 @@ export default function ControlApp() {
   const aiGenerating = useAiStore((s) => s.generating);
   const aiError = useAiStore((s) => s.error);
   const aiSetConfig = useAiStore((s) => s.setConfig);
+  const aiSetError = useAiStore((s) => s.setError);
   const aiGenerate = useAiStore((s) => s.generate);
   const aiDecideAutoVJ = useAiStore((s) => s.decideAutoVJ);
 
@@ -374,10 +380,19 @@ export default function ControlApp() {
     }
   }, [loadProject, ledLoadProject, aiSetConfig]);
 
+  const validateAiVisual = useCallback(async (sceneType: SceneType, code: string) => {
+    if (!isGenerativeSceneType(sceneType)) return;
+    const result = await validateSceneVisual(sceneType, code, useVJStore.getState().audio);
+    if (!result.ok) {
+      throw new Error(`AI visual validation failed: ${result.reason}`);
+    }
+  }, []);
+
   const handleAiGenerate = useCallback(
     async (sceneType: SceneType, prompt: string) => {
       try {
         const code = await aiGenerate(sceneType, addGenreHint(prompt, audio));
+        await validateAiVisual(sceneType, code);
         addScene(sceneType);
         const currentScenes = useVJStore.getState().scenes;
         const nextScene = currentScenes[currentScenes.length - 1];
@@ -385,9 +400,11 @@ export default function ControlApp() {
           updateSceneCode(nextScene.id, code);
           selectScene(nextScene.id);
         }
-      } catch {}
+      } catch (error) {
+        aiSetError(String(error));
+      }
     },
-    [aiGenerate, addScene, audio, updateSceneCode, selectScene],
+    [aiGenerate, addScene, aiSetError, audio, updateSceneCode, selectScene, validateAiVisual],
   );
 
   const handleAiEdit = useCallback(
@@ -395,10 +412,13 @@ export default function ControlApp() {
       if (!selectedScene) return;
       try {
         const code = await aiGenerate(selectedScene.type, addGenreHint(prompt, audio), selectedScene.code);
+        await validateAiVisual(selectedScene.type, code);
         updateSceneCode(selectedScene.id, code);
-      } catch {}
+      } catch (error) {
+        aiSetError(String(error));
+      }
     },
-    [aiGenerate, audio, selectedScene, updateSceneCode],
+    [aiGenerate, aiSetError, audio, selectedScene, updateSceneCode, validateAiVisual],
   );
 
   const updateAutoVJ = useCallback((patch: Partial<AutoVJSettings>) => {
@@ -551,6 +571,10 @@ export default function ControlApp() {
           currentScenes: useVJStore.getState().scenes,
         });
         const code = await aiGenerate(type, generatePrompt);
+        const validation = await validateSceneVisual(type, code, useVJStore.getState().audio);
+        if (!validation.ok) {
+          throw new Error(`AI visual validation failed: ${validation.reason}`);
+        }
         appendAutoLog("GENERATE", `code generated; type=${type}; direction=${decision.visualDirection || decision.reason}`);
 
         addScene(type);

@@ -234,6 +234,18 @@ var __syncP5Globals = function() {
   beatCount = audio.beatCount;
   fft = audio.fft;
 };`);
+    lines.push(`var __vjCC = createCanvas;
+createCanvas = function() {
+  var __r = __vjCC.apply(null, arguments);
+  __syncP5Globals();
+  return __r;
+};
+var __vjRC = resizeCanvas;
+resizeCanvas = function() {
+  var __r = __vjRC.apply(null, arguments);
+  __syncP5Globals();
+  return __r;
+};`);
 
     return lines.join("\n");
   }
