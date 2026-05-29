@@ -14,6 +14,10 @@ export async function ledLoadLayout(path: string): Promise<LayoutInfo> {
   return invoke("led_load_layout", { path });
 }
 
+export async function ledLoadLayoutJson(content: string): Promise<LayoutInfo> {
+  return invoke("led_load_layout_json", { content });
+}
+
 export async function ledInitSimple(
   broadcastIp: string,
   port: number,
@@ -27,6 +31,13 @@ export async function ledSendColors(
   colors: Record<number, [number, number, number]>,
 ): Promise<void> {
   return invoke("led_send_colors", { colors });
+}
+
+export async function ledSendSampledFrame(
+  lanternIds: number[],
+  rgbaData: number[],
+): Promise<void> {
+  return invoke("led_send_sampled_frame", { lanternIds, rgbaData });
 }
 
 export async function ledFill(r: number, g: number, b: number): Promise<void> {

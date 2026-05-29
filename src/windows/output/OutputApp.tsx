@@ -3,7 +3,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useEngine } from "../../hooks/useEngine";
 import { useLedStore } from "../../stores/ledStore";
 import { listenLedState, requestLedState } from "../../events/vjEvents";
-import { ledInitSimple, ledLoadLayout } from "../../led/commands";
+import { ledInitSimple, ledLoadLayout, ledLoadLayoutJson } from "../../led/commands";
 
 function outputWindowLabel(): string {
   try {
@@ -39,7 +39,9 @@ export default function OutputApp() {
 
     void (async () => {
       try {
-        const info = ledConfig.layoutPath
+        const info = ledConfig.layoutContent
+          ? await ledLoadLayoutJson(ledConfig.layoutContent)
+          : ledConfig.layoutPath
           ? await ledLoadLayout(ledConfig.layoutPath)
           : await ledInitSimple(ledConfig.broadcastIp, ledConfig.port, ledConfig.deviceId, ledConfig.pixelCount);
         if (cancelled) return;
@@ -56,7 +58,7 @@ export default function OutputApp() {
     return () => {
       cancelled = true;
     };
-  }, [ledConfig.enabled, ledConfig.layoutPath, ledConfig.broadcastIp, ledConfig.port, ledConfig.deviceId, ledConfig.pixelCount, setConnected, setLayoutInfo]);
+  }, [ledConfig.enabled, ledConfig.layoutPath, ledConfig.layoutContent, ledConfig.broadcastIp, ledConfig.port, ledConfig.deviceId, ledConfig.pixelCount, setConnected, setLayoutInfo]);
 
   useEngine({
     outputContainerRef: containerRef,

@@ -5,6 +5,7 @@ interface AiConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  controlPrompt: string;
 }
 
 interface AiStore {
@@ -28,9 +29,17 @@ const STORAGE_KEY = "vjled-ai-config";
 function loadConfig(): AiConfig {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl ? parsed.baseUrl : "https://api.openai.com/v1",
+        apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : "",
+        model: typeof parsed.model === "string" && parsed.model ? parsed.model : "gpt-4o",
+        controlPrompt: typeof parsed.controlPrompt === "string" ? parsed.controlPrompt : "",
+      };
+    }
   } catch {}
-  return { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o" };
+  return { baseUrl: "https://api.openai.com/v1", apiKey: "", model: "gpt-4o", controlPrompt: "" };
 }
 
 function saveConfig(config: AiConfig) {

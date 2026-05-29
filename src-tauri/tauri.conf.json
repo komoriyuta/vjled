@@ -57,7 +57,22 @@
         "depends": [
           "gstreamer1.0-plugins-base",
           "gstreamer1.0-plugins-good"
-        ]
+        ],
+        "files": {
+          "usr/lib/libcef.so": "cef-bundle/libcef.so",
+          "usr/lib/libEGL.so": "cef-bundle/libEGL.so",
+          "usr/lib/libGLESv2.so": "cef-bundle/libGLESv2.so",
+          "usr/lib/libvk_swiftshader.so": "cef-bundle/libvk_swiftshader.so",
+          "usr/lib/libvulkan.so.1": "cef-bundle/libvulkan.so.1",
+          "usr/lib/vk_swiftshader_icd.json": "cef-bundle/vk_swiftshader_icd.json",
+          "usr/lib/icudtl.dat": "cef-bundle/icudtl.dat",
+          "usr/lib/v8_context_snapshot.bin": "cef-bundle/v8_context_snapshot.bin",
+          "usr/lib/chrome_100_percent.pak": "cef-bundle/chrome_100_percent.pak",
+          "usr/lib/chrome_200_percent.pak": "cef-bundle/chrome_200_percent.pak",
+          "usr/lib/resources.pak": "cef-bundle/resources.pak",
+          "usr/lib/locales/en-US.pak": "cef-bundle/locales/en-US.pak",
+          "usr/lib/locales/ja.pak": "cef-bundle/locales/ja.pak"
+        }
       },
       "appimage": {
         "files": {

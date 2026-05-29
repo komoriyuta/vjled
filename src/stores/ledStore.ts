@@ -14,6 +14,9 @@ const defaultLedConfig: LedConfig = {
   deviceId: 1,
   pixelCount: 25,
   layoutPath: null,
+  layoutContent: null,
+  calibrationOffDelayMs: 120,
+  calibrationOnDelayMs: 90,
   cameraDeviceId: null,
 };
 

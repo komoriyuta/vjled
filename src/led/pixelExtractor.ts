@@ -1,4 +1,4 @@
-import { ledSendColors } from "./commands";
+import { ledSendColors, ledSendSampledFrame } from "./commands";
 import { GpuPixelSampler } from "./gpuPixelSampler";
 import type { CalibrationPoint, LedConfig } from "../types";
 
@@ -99,6 +99,27 @@ export function extractPixelColorsGpu(
   }
 }
 
+function extractSampledFrameGpu(
+  canvas: HTMLCanvasElement,
+  points: CalibrationPoint[],
+  config: LedConfig,
+): { lanternIds: number[]; rgbaData: Uint8Array } | null {
+  if (gpuSampler === undefined) {
+    try {
+      gpuSampler = new GpuPixelSampler();
+    } catch {
+      gpuSampler = null;
+    }
+  }
+  try {
+    return gpuSampler?.sampleFrame(canvas, points, config) ?? null;
+  } catch {
+    gpuSampler?.destroy();
+    gpuSampler = null;
+    return null;
+  }
+}
+
 export async function sendLedFrameFromCanvas(
   canvas: HTMLCanvasElement | null,
   points: CalibrationPoint[],
@@ -106,9 +127,18 @@ export async function sendLedFrameFromCanvas(
 ): Promise<void> {
   if (!canvas || !config.enabled || points.length === 0) return;
 
+  const sampledFrame = extractSampledFrameGpu(canvas, points, config);
+  if (sampledFrame && sampledFrame.lanternIds.length > 0) {
+    try {
+      await ledSendSampledFrame(sampledFrame.lanternIds, Array.from(sampledFrame.rgbaData));
+    } catch {
+      // silently ignore send errors during real-time operation
+    }
+    return;
+  }
+
   const ctx = canvas.getContext("2d");
-  const colors = extractPixelColorsGpu(canvas, points, config)
-    ?? (ctx ? extractPixelColors(ctx, canvas.width, canvas.height, points, config) : null);
+  const colors = ctx ? extractPixelColors(ctx, canvas.width, canvas.height, points, config) : null;
   if (!colors || colors.size === 0) return;
 
   const colorObj: Record<number, [number, number, number]> = {};

@@ -8,8 +8,8 @@ mod video_server;
 use audio::{AudioCapture, AudioDeviceInfo};
 use calibration::{CalibrationConfig, Calibrator};
 use led::controllers::{LayoutInfo, MultiDeviceLEDController};
-use led::protocol::UdpSendReport;
 use led::layout::HardwareLayout;
+use led::protocol::UdpSendReport;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -52,6 +52,15 @@ fn led_load_layout(path: String, state: State<AppState>) -> Result<LayoutInfo, S
 }
 
 #[tauri::command]
+fn led_load_layout_json(content: String, state: State<AppState>) -> Result<LayoutInfo, String> {
+    let layout = HardwareLayout::from_json(&content)?;
+    let ctrl = MultiDeviceLEDController::from_layout(&layout)?;
+    let info = ctrl.layout_info();
+    *state.controller.lock().map_err(|e| e.to_string())? = Some(ctrl);
+    Ok(info)
+}
+
+#[tauri::command]
 fn led_init_simple(
     broadcast_ip: String,
     port: u16,
@@ -70,6 +79,17 @@ fn led_send_colors(colors: HashMap<usize, [u8; 3]>, state: State<AppState>) -> R
     let guard = state.controller.lock().map_err(|e| e.to_string())?;
     let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
     ctrl.apply_colors(&colors)
+}
+
+#[tauri::command]
+fn led_send_sampled_frame(
+    lantern_ids: Vec<usize>,
+    rgba_data: Vec<u8>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let guard = state.controller.lock().map_err(|e| e.to_string())?;
+    let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
+    ctrl.apply_sampled_frame(&lantern_ids, &rgba_data)
 }
 
 #[tauri::command]
@@ -107,7 +127,12 @@ fn led_ping(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn led_debug_fill(r: u8, g: u8, b: u8, state: State<AppState>) -> Result<Vec<UdpSendReport>, String> {
+fn led_debug_fill(
+    r: u8,
+    g: u8,
+    b: u8,
+    state: State<AppState>,
+) -> Result<Vec<UdpSendReport>, String> {
     let guard = state.controller.lock().map_err(|e| e.to_string())?;
     let ctrl = guard.as_ref().ok_or("LED controller not initialized")?;
     ctrl.debug_fill_all(r, g, b)
@@ -284,7 +309,7 @@ fn native_gpu_diagnostics() -> NativeGpuDiagnostics {
 pub fn run() {
     let builder = tauri::Builder::<TauriRuntime>::new();
 
-    #[cfg(all(feature = "cef", debug_assertions, target_os = "linux"))]
+    #[cfg(all(feature = "cef", target_os = "linux"))]
     let builder = builder.command_line_args([("--no-sandbox", None::<String>)]);
 
     builder
@@ -302,8 +327,10 @@ pub fn run() {
             audio_start,
             audio_stop,
             led_load_layout,
+            led_load_layout_json,
             led_init_simple,
             led_send_colors,
+            led_send_sampled_frame,
             led_fill,
             led_set_pixel,
             led_all_off,

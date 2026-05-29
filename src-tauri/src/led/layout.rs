@@ -88,7 +88,11 @@ impl HardwareLayout {
     pub fn load(path: &Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read layout file: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Failed to parse layout JSON: {}", e))
+        Self::from_json(&content)
+    }
+
+    pub fn from_json(content: &str) -> Result<Self, String> {
+        serde_json::from_str(content).map_err(|e| format!("Failed to parse layout JSON: {}", e))
     }
 
     pub fn resolve(&self) -> ResolvedLayout {

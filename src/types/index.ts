@@ -119,6 +119,9 @@ export interface LedConfig {
   deviceId: number;
   pixelCount: number;
   layoutPath: string | null;
+  layoutContent: string | null;
+  calibrationOffDelayMs: number;
+  calibrationOnDelayMs: number;
   cameraDeviceId: string | null;
 }
 

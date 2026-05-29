@@ -1,3 +1,5 @@
+use if_addrs::IfAddr;
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 
 const CMD_SET_PIXEL_RANGE: u8 = 0x00;
@@ -9,7 +11,8 @@ const HEADER_SIZE: usize = 9;
 const MAX_PIXELS_PER_PACKET: usize = 255;
 
 pub struct NeoPixelProtocol {
-    socket: UdpSocket,
+    fallback_socket: UdpSocket,
+    interface_sockets: HashMap<Ipv4Addr, UdpSocket>,
     frame_no: u32,
 }
 
@@ -25,15 +28,42 @@ pub struct UdpSendReport {
 
 impl NeoPixelProtocol {
     pub fn new() -> Result<Self, String> {
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .map_err(|e| format!("Failed to bind UDP socket: {}", e))?;
-        socket
-            .set_broadcast(true)
-            .map_err(|e| format!("Failed to set broadcast: {}", e))?;
+        let fallback_socket = Self::bind_socket(Ipv4Addr::UNSPECIFIED)?;
+        let interface_sockets = Self::bind_interface_sockets();
         Ok(Self {
-            socket,
+            fallback_socket,
+            interface_sockets,
             frame_no: 0,
         })
+    }
+
+    fn bind_socket(local_ip: Ipv4Addr) -> Result<UdpSocket, String> {
+        let socket = UdpSocket::bind(SocketAddrV4::new(local_ip, 0))
+            .map_err(|e| format!("Failed to bind UDP socket on {}: {}", local_ip, e))?;
+        socket
+            .set_broadcast(true)
+            .map_err(|e| format!("Failed to set broadcast on {}: {}", local_ip, e))?;
+        Ok(socket)
+    }
+
+    fn bind_interface_sockets() -> HashMap<Ipv4Addr, UdpSocket> {
+        let mut sockets = HashMap::new();
+        let Ok(ifaces) = if_addrs::get_if_addrs() else {
+            return sockets;
+        };
+
+        for iface in ifaces {
+            let IfAddr::V4(v4) = iface.addr else {
+                continue;
+            };
+            if v4.ip.is_loopback() || sockets.contains_key(&v4.ip) {
+                continue;
+            }
+            if let Ok(socket) = Self::bind_socket(v4.ip) {
+                sockets.insert(v4.ip, socket);
+            }
+        }
+        sockets
     }
 
     fn next_frame_no(&mut self) -> u32 {
@@ -59,10 +89,40 @@ impl NeoPixelProtocol {
         buf
     }
 
+    fn socket_for_target(&self, target: Ipv4Addr) -> &UdpSocket {
+        let Ok(ifaces) = if_addrs::get_if_addrs() else {
+            return &self.fallback_socket;
+        };
+
+        for iface in ifaces {
+            let IfAddr::V4(v4) = iface.addr else {
+                continue;
+            };
+            if v4.ip.is_loopback() {
+                continue;
+            }
+            let mask = u32::from(v4.netmask);
+            if (u32::from(v4.ip) & mask) == (u32::from(target) & mask) {
+                if let Some(socket) = self.interface_sockets.get(&v4.ip) {
+                    return socket;
+                }
+            }
+        }
+
+        &self.fallback_socket
+    }
+
     fn send_to(&self, data: &[u8], target: &SocketAddrV4) -> Result<usize, String> {
-        self.socket
+        self.socket_for_target(*target.ip())
             .send_to(data, target)
             .map_err(|e| format!("UDP send failed: {}", e))
+    }
+
+    fn local_addr_for_target(&self, target: &SocketAddrV4) -> String {
+        self.socket_for_target(*target.ip())
+            .local_addr()
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|_| "unknown".to_string())
     }
 
     fn send_report(
@@ -74,11 +134,7 @@ impl NeoPixelProtocol {
         frame_no: u32,
     ) -> Result<UdpSendReport, String> {
         let bytes = self.send_to(data, target)?;
-        let local_addr = self
-            .socket
-            .local_addr()
-            .map(|addr| addr.to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+        let local_addr = self.local_addr_for_target(target);
         Ok(UdpSendReport {
             target: target.to_string(),
             local_addr,

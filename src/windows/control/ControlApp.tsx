@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import Editor from "@monaco-editor/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAiStore } from "../../stores/aiStore";
@@ -14,6 +14,7 @@ import {
   ledFill,
   ledInitSimple,
   ledLoadLayout,
+  ledLoadLayoutJson,
   ledSetPixel,
 } from "../../led/commands";
 import { attachCameraStream, listCalibrationCameras, startCalibrationCamera, type CameraDevice } from "../../led/camera";
@@ -22,11 +23,10 @@ import { rgbaFromCanvas } from "../../led/pixelExtractor";
 import { listAudioDevices, type RustAudioDevice, useAudioAnalysis } from "../../hooks/useAudioAnalysis";
 import { useEngine } from "../../hooks/useEngine";
 import { createProjectData, parseProjectData } from "../../project";
-import type { AudioAnalysis, BusLabel, MixMode, MixSettings, Scene, SceneKeySettings, SceneType, VideoSync } from "../../types";
+import type { AudioAnalysis, BusLabel, CalibrationPoint, LayoutInfo, LedConfig, MappingHandle, MixMode, MixSettings, Scene, SceneKeySettings, SceneType, VideoSync } from "../../types";
 import {
   chooseProjectLoadPath,
   chooseProjectSavePath,
-  chooseLayoutPath,
   chooseVideoPath,
   assignOutputsToMonitors,
   closeOutputWindows,
@@ -177,6 +177,93 @@ const defaultSceneKey: SceneKeySettings = {
   softness: 0.08,
   spill: 0.2,
 };
+
+function clampMs(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(5000, Math.round(value)));
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function downloadJson(filename: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseMapHandles(value: unknown): MappingHandle[] | null {
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const handles = value.map((item) => {
+    if (!Array.isArray(item) || item.length !== 2) return null;
+    const x = Number(item[0]);
+    const y = Number(item[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))] as MappingHandle;
+  });
+  return handles.every(Boolean) ? handles as MappingHandle[] : null;
+}
+
+function parseMapPoints(value: unknown): CalibrationPoint[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const lanternId = Number(item.lanternId);
+    const x = Number(item.x);
+    const y = Number(item.y);
+    if (!Number.isFinite(lanternId) || !Number.isFinite(x) || !Number.isFinite(y)) return [];
+    return [{ lanternId: Math.max(0, Math.round(lanternId)), x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) }];
+  });
+}
+
+function parseLayoutSnapshot(value: unknown): LayoutInfo | null {
+  if (!isRecord(value) || !Array.isArray(value.devices)) return null;
+  const devices = value.devices.flatMap((device) => {
+    if (!isRecord(device)) return [];
+    return [{
+      key: typeof device.key === "string" ? device.key : "",
+      device_id: Math.max(0, Math.round(Number(device.device_id) || 0)),
+      total_pixels: Math.max(0, Math.round(Number(device.total_pixels) || 0)),
+      controller_ip: typeof device.controller_ip === "string" ? device.controller_ip : "",
+    }];
+  });
+  return {
+    total_pixels: Math.max(0, Math.round(Number(value.total_pixels) || 0)),
+    device_count: Math.max(0, Math.round(Number(value.device_count) || devices.length)),
+    devices,
+  };
+}
+
+function parseLedMapExport(raw: unknown): {
+  config?: Partial<LedConfig>;
+  layoutInfo: LayoutInfo | null;
+  mappingHandles: MappingHandle[];
+  rawCameraPoints: CalibrationPoint[];
+  calibrationPoints: CalibrationPoint[];
+} {
+  const led = isRecord(raw) && isRecord(raw.led) ? raw.led : raw;
+  if (!isRecord(led)) throw new Error("LED map file is not a JSON object");
+  const mappingHandles = parseMapHandles(led.mappingHandles);
+  if (!mappingHandles) throw new Error("LED map file does not contain valid mappingHandles");
+  return {
+    config: isRecord(led.config) ? led.config as Partial<LedConfig> : undefined,
+    layoutInfo: parseLayoutSnapshot(led.layoutInfo),
+    mappingHandles,
+    rawCameraPoints: parseMapPoints(led.rawCameraPoints),
+    calibrationPoints: parseMapPoints(led.calibrationPoints),
+  };
+}
 
 function readWebGLDiagnostics(): WebGLDiagnostics {
   const canvas = document.createElement("canvas");
@@ -1694,6 +1781,8 @@ function LedWorkspace() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mappingPreviewRef = useRef<HTMLDivElement>(null);
   const scenes = useVJStore((s) => s.scenes);
+  const layoutFileInputRef = useRef<HTMLInputElement>(null);
+  const mapFileInputRef = useRef<HTMLInputElement>(null);
   const config = useLedStore((s) => s.config);
   const connected = useLedStore((s) => s.connected);
   const layoutInfo = useLedStore((s) => s.layoutInfo);
@@ -1761,6 +1850,12 @@ function LedWorkspace() {
   }, [config.cameraDeviceId, stopCamera]);
 
   const ensureLedSender = useCallback(async () => {
+    if (config.layoutContent) {
+      const info = await ledLoadLayoutJson(config.layoutContent);
+      setLayoutInfo(info);
+      setConnected(true);
+      return info;
+    }
     if (config.layoutPath) {
       const info = await ledLoadLayout(config.layoutPath);
       setLayoutInfo(info);
@@ -1774,12 +1869,18 @@ function LedWorkspace() {
   }, [config, setConnected, setLayoutInfo]);
 
   const loadLayoutFile = useCallback(async () => {
+    layoutFileInputRef.current?.click();
+  }, []);
+
+  const onLayoutFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     try {
       setError(null);
-      const path = await chooseLayoutPath();
-      if (!path) return;
-      setConfig({ layoutPath: path });
-      const info = await ledLoadLayout(path);
+      const file = event.currentTarget.files?.[0];
+      event.currentTarget.value = "";
+      if (!file) return;
+      const content = await file.text();
+      setConfig({ layoutPath: file.name, layoutContent: content });
+      const info = await ledLoadLayoutJson(content);
       setLayoutInfo(info);
       setConnected(true);
     } catch (e) {
@@ -1789,10 +1890,51 @@ function LedWorkspace() {
   }, [setConfig, setConnected, setLayoutInfo]);
 
   const clearLayoutFile = useCallback(() => {
-    setConfig({ layoutPath: null });
+    setConfig({ layoutPath: null, layoutContent: null });
     setLayoutInfo(null);
     setConnected(false);
   }, [setConfig, setConnected, setLayoutInfo]);
+
+  const exportLedMap = useCallback(() => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadJson(`vjled-map-${stamp}.json`, {
+      app: "vjled",
+      type: "led-map",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      led: {
+        config,
+        layoutInfo,
+        mappingHandles,
+        rawCameraPoints,
+        calibrationPoints,
+      },
+    });
+  }, [calibrationPoints, config, layoutInfo, mappingHandles, rawCameraPoints]);
+
+  const loadLedMap = useCallback(() => {
+    mapFileInputRef.current?.click();
+  }, []);
+
+  const onMapFileChange = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    try {
+      setError(null);
+      const file = event.currentTarget.files?.[0];
+      event.currentTarget.value = "";
+      if (!file) return;
+      const parsed = parseLedMapExport(JSON.parse(await file.text()));
+      if (parsed.config) setConfig({ ...parsed.config, enabled: config.enabled });
+      setLayoutInfo(parsed.layoutInfo);
+      setMappingHandles(parsed.mappingHandles);
+      setRawCameraPoints(parsed.rawCameraPoints);
+      setCalibrationPoints(parsed.calibrationPoints.length > 0
+        ? parsed.calibrationPoints
+        : mapCameraToVideo(parsed.mappingHandles, parsed.rawCameraPoints));
+      setConnected(false);
+    } catch (e) {
+      setError(`Map import: ${String(e)}`);
+    }
+  }, [config.enabled, setCalibrationPoints, setConfig, setConnected, setLayoutInfo, setMappingHandles, setRawCameraPoints]);
 
   const updateMappingHandle = useCallback((index: number, clientX: number, clientY: number) => {
     const preview = mappingPreviewRef.current;
@@ -1876,7 +2018,7 @@ function LedWorkspace() {
     let previous = captureFrame();
     if (!previous) return null;
     for (let i = 0; i < 10; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await waitMs(60);
       const frame = captureFrame();
       if (!frame) continue;
       if (lumaDelta(previous, frame) < 1.8) {
@@ -1894,7 +2036,7 @@ function LedWorkspace() {
   const captureAveragedLitFrame = useCallback(async () => {
     const frames: NonNullable<ReturnType<typeof captureFrame>>[] = [];
     for (let i = 0; i < 4; i++) {
-      await new Promise((resolve) => setTimeout(resolve, i === 0 ? 90 : 45));
+      if (i > 0) await waitMs(45);
       const frame = captureFrame();
       if (frame) frames.push(frame);
     }
@@ -1914,7 +2056,7 @@ function LedWorkspace() {
       const info = layoutInfo ?? await ensureLedSender();
       await calibrationReset();
       await ledAllOff();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await waitMs(Math.max(500, config.calibrationOffDelayMs));
 
       const rawPoints = [];
       setRawCameraPoints([]);
@@ -1924,11 +2066,12 @@ function LedWorkspace() {
         let detected: [number, number] | null = null;
         for (let attempt = 0; attempt < 3; attempt++) {
           await ledAllOff();
-          await new Promise((resolve) => setTimeout(resolve, 120));
+          await waitMs(config.calibrationOffDelayMs);
           const baseline = await captureStableOffFrame();
           if (!baseline) continue;
           await calibrationSetBaseline(baseline.data, baseline.width, baseline.height);
           await ledSetPixel(i, 255, 255, 255);
+          await waitMs(config.calibrationOnDelayMs);
           const frame = await captureAveragedLitFrame();
           if (!frame) continue;
           detected = await calibrationDetectLed(frame.data, frame.width, frame.height);
@@ -1947,7 +2090,7 @@ function LedWorkspace() {
     } finally {
       setCalibrating(false);
     }
-  }, [cameraStream, layoutInfo, ensureLedSender, captureStableOffFrame, captureAveragedLitFrame, mappingHandles, resetCalibration, setCalibrating, setCalibrationPoints, setCalibrationProgress, setRawCameraPoints]);
+  }, [cameraStream, config.calibrationOffDelayMs, config.calibrationOnDelayMs, layoutInfo, ensureLedSender, captureStableOffFrame, captureAveragedLitFrame, mappingHandles, resetCalibration, setCalibrating, setCalibrationPoints, setCalibrationProgress, setRawCameraPoints]);
 
   const targetMode = layoutInfo && layoutInfo.device_count > 1
     ? "Per ESP"
@@ -2011,6 +2154,13 @@ function LedWorkspace() {
               {config.layoutPath ?? "Simple UDP target"}
             </span>
             <button className="button" onClick={loadLayoutFile}>Load JSON</button>
+            <input
+              ref={layoutFileInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={onLayoutFileChange}
+              style={{ display: "none" }}
+            />
           </div>
           {config.layoutPath && (
             <button className="button is-ghost" onClick={clearLayoutFile}>Use Simple Target</button>
@@ -2116,12 +2266,45 @@ function LedWorkspace() {
                 <option value="">Default camera</option>
                 {cameras.map((camera) => <option key={camera.deviceId} value={camera.deviceId}>{camera.label}</option>)}
               </select>
+              <div className="led-config-grid">
+                <div className="field">
+                  <label>Off wait ms</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={5000}
+                    step={10}
+                    value={config.calibrationOffDelayMs}
+                    onChange={(e) => setConfig({ calibrationOffDelayMs: clampMs(e.target.valueAsNumber, 120) })}
+                  />
+                </div>
+                <div className="field">
+                  <label>On wait ms</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={5000}
+                    step={10}
+                    value={config.calibrationOnDelayMs}
+                    onChange={(e) => setConfig({ calibrationOnDelayMs: clampMs(e.target.valueAsNumber, 90) })}
+                  />
+                </div>
+              </div>
               <button className="button is-primary" disabled={!cameraStream || calibrating} onClick={runCalibration}>
                 {calibrating ? `Calibrating ${(calibrationProgress * 100).toFixed(0)}%` : "Auto Calibrate"}
               </button>
               <div className="led-camera-grid">
                 <button className="button" onClick={() => fillAllLeds(255, 255, 255)}>All On</button>
                 <button className="button" onClick={turnOffLeds}>All Off</button>
+                <button className="button" onClick={loadLedMap}>Import Map</button>
+                <button className="button" onClick={exportLedMap}>Export Map</button>
+                <input
+                  ref={mapFileInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={onMapFileChange}
+                  style={{ display: "none" }}
+                />
               </div>
               <div className="info-grid__row">
                 <span className="info-grid__label">Camera</span>
@@ -2474,6 +2657,11 @@ async function validateRenderedCode(sceneType: SceneType, code: string, audio: A
     renderer.init(canvas);
     renderer.setCode(code);
     const frames: ImageData[] = [];
+    const readCanvas = document.createElement("canvas");
+    readCanvas.width = canvas.width;
+    readCanvas.height = canvas.height;
+    const readCtx = readCanvas.getContext("2d", { willReadFrequently: true });
+    if (!readCtx) return { ok: false, reason: "validation canvas could not be read" };
     for (let i = 0; i < 8; i++) {
       const beat = i === 0 || i === 4;
       renderer.update(i / 12, 1 / 12, {
@@ -2483,9 +2671,9 @@ async function validateRenderedCode(sceneType: SceneType, code: string, audio: A
         beatCount: validationAudio.beatCount + (beat ? i : 0),
       });
       await nextFrame();
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return { ok: false, reason: "validation canvas could not be read" };
-      frames.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      readCtx.clearRect(0, 0, readCanvas.width, readCanvas.height);
+      readCtx.drawImage(canvas, 0, 0, readCanvas.width, readCanvas.height);
+      frames.push(readCtx.getImageData(0, 0, readCanvas.width, readCanvas.height));
     }
     return analyzeRenderedFrames(frames);
   } catch (error) {

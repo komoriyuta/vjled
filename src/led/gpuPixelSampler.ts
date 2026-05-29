@@ -89,6 +89,7 @@ export class GpuPixelSampler {
   private cachedKey = "";
   private cachedCount = 0;
   private pixels = new Uint8Array(0);
+  private lanternIds: number[] = [];
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -135,8 +136,26 @@ export class GpuPixelSampler {
     points: CalibrationPoint[],
     config: LedConfig,
   ): Map<number, [number, number, number]> {
+    const frame = this.sampleFrame(source, points, config);
+    const colors = new Map<number, [number, number, number]>();
+    for (let i = 0; i < frame.lanternIds.length; i++) {
+      const offset = i * 4;
+      colors.set(frame.lanternIds[i], [
+        frame.rgbaData[offset],
+        frame.rgbaData[offset + 1],
+        frame.rgbaData[offset + 2],
+      ]);
+    }
+    return colors;
+  }
+
+  sampleFrame(
+    source: HTMLCanvasElement,
+    points: CalibrationPoint[],
+    config: LedConfig,
+  ): { lanternIds: number[]; rgbaData: Uint8Array } {
     const gl = this.gl;
-    if (points.length === 0) return new Map();
+    if (points.length === 0) return { lanternIds: [], rgbaData: new Uint8Array(0) };
 
     this.ensurePoints(points);
     this.ensureOutput(points.length);
@@ -165,16 +184,7 @@ export class GpuPixelSampler {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
-    const colors = new Map<number, [number, number, number]>();
-    for (let i = 0; i < points.length; i++) {
-      const offset = i * 4;
-      colors.set(points[i].lanternId, [
-        this.pixels[offset],
-        this.pixels[offset + 1],
-        this.pixels[offset + 2],
-      ]);
-    }
-    return colors;
+    return { lanternIds: this.lanternIds, rgbaData: this.pixels };
   }
 
   destroy() {
@@ -195,8 +205,10 @@ export class GpuPixelSampler {
     const gl = this.gl;
     const indices = new Float32Array(points.length);
     const coords = new Float32Array(points.length * 2);
+    this.lanternIds = new Array(points.length);
     for (let i = 0; i < points.length; i++) {
       indices[i] = i;
+      this.lanternIds[i] = points[i].lanternId;
       coords[i * 2] = clampUnit(points[i].x);
       coords[i * 2 + 1] = 1 - clampUnit(points[i].y);
     }

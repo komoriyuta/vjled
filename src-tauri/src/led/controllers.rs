@@ -101,6 +101,77 @@ impl MultiDeviceLEDController {
         Ok(())
     }
 
+    pub fn apply_sampled_frame(
+        &self,
+        lantern_ids: &[usize],
+        rgba_data: &[u8],
+    ) -> Result<(), String> {
+        if rgba_data.len() < lantern_ids.len() * 4 {
+            return Err("Sampled frame rgba_data is shorter than lantern_ids".to_string());
+        }
+
+        let mut frame = vec![None; self.layout.total_pixels];
+        for (i, lantern_id) in lantern_ids.iter().enumerate() {
+            if *lantern_id >= frame.len() {
+                continue;
+            }
+            let offset = i * 4;
+            frame[*lantern_id] = Some([
+                rgba_data[offset],
+                rgba_data[offset + 1],
+                rgba_data[offset + 2],
+            ]);
+        }
+
+        let mut proto = self
+            .protocol
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let port = self.layout.port;
+
+        for device in &self.layout.devices {
+            let mut pixels: Vec<(u8, u8, u8)> = Vec::new();
+            let mut start_local: Option<usize> = None;
+
+            for local_idx in 0..device.total_pixels {
+                let global_idx = device.global_start + local_idx;
+                if let Some([r, g, b]) = frame[global_idx] {
+                    if start_local.is_none() {
+                        start_local = Some(local_idx);
+                        pixels.clear();
+                    }
+                    pixels.push((r, g, b));
+                } else if start_local.is_some() {
+                    if let Some(start) = start_local {
+                        proto.send_set_pixel_range_to(
+                            device.device_id,
+                            start as u16,
+                            &pixels,
+                            &device.controller_ip,
+                            port,
+                        )?;
+                    }
+                    start_local = None;
+                    pixels.clear();
+                }
+            }
+
+            if let Some(start) = start_local {
+                proto.send_set_pixel_range_to(
+                    device.device_id,
+                    start as u16,
+                    &pixels,
+                    &device.controller_ip,
+                    port,
+                )?;
+            }
+
+            proto.send_show_to(device.device_id, &device.controller_ip, port)?;
+        }
+
+        Ok(())
+    }
+
     pub fn fill_all(&self, r: u8, g: u8, b: u8) -> Result<(), String> {
         let mut proto = self
             .protocol

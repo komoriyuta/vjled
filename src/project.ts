@@ -17,6 +17,7 @@ import type {
 export interface ProjectAiSettings {
   baseUrl: string;
   model: string;
+  controlPrompt: string;
 }
 
 export interface ProjectAudioSettings {
@@ -184,6 +185,9 @@ function parseLedConfig(value: unknown, fallback: LedConfig): LedConfig {
     deviceId: Math.max(0, Math.round(finiteNumber(value.deviceId, fallback.deviceId))),
     pixelCount: Math.max(1, Math.round(finiteNumber(value.pixelCount, fallback.pixelCount))),
     layoutPath: typeof value.layoutPath === "string" ? value.layoutPath : null,
+    layoutContent: typeof value.layoutContent === "string" ? value.layoutContent : null,
+    calibrationOffDelayMs: Math.max(0, Math.min(5000, Math.round(finiteNumber(value.calibrationOffDelayMs, fallback.calibrationOffDelayMs)))),
+    calibrationOnDelayMs: Math.max(0, Math.min(5000, Math.round(finiteNumber(value.calibrationOnDelayMs, fallback.calibrationOnDelayMs)))),
     cameraDeviceId: typeof value.cameraDeviceId === "string" ? value.cameraDeviceId : null,
   };
 }
@@ -242,6 +246,7 @@ function parseAiSettings(value: unknown): ProjectAiSettings | null {
   return {
     baseUrl: typeof value.baseUrl === "string" && value.baseUrl ? value.baseUrl : "https://api.openai.com/v1",
     model: typeof value.model === "string" && value.model ? value.model : "gpt-4o",
+    controlPrompt: typeof value.controlPrompt === "string" ? value.controlPrompt : "",
   };
 }
 
